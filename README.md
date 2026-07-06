@@ -201,7 +201,7 @@ As mentioned, this project is a mosaic of ideas and stands on the shoulders of g
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp) (Georgi Gerganov & co.) — MIT License**: The formidable inference engine that made the local LLM explosion possible, on which our entire native backend is based.
 - **[pi agent harness](https://github.com/earendil-works/pi) (Mario Zechner) — MIT License**: The starting point for our `utter/` frontend, a fantastic terminal UI that we forked (which was originally designed for external APIs).
 - **[ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (I. Kawrakow) — MIT License**: Whose excellent work on the *suffix-tree* was fundamental in developing our drafter for speculative decoding.
-- **[ds4](https://github.com/antirez/ds4) (Salvatore Sanfilippo "antirez") — MIT License**: Even though its direct usage is minimal, his excellent work on this engine and his attitude toward experimentation were a major source of inspiration.
+- **[ds4](https://github.com/antirez/ds4) (Salvatore Sanfilippo "antirez") — MIT License**: His excellent work on this engine and his attitude toward experimentation were a major source of inspiration.
 - A general thank you to the amazing open source AI community and to all the researchers constantly experimenting with new architectures (routing, dual-brain, etc.), providing the spark for all these experiments.
 - **AI Pair Programmers**: A significant portion of this project's code, architectural validation, and documentation was written and debugged collaboratively with the help of various AI coding assistants.
 
