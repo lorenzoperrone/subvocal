@@ -1,0 +1,25 @@
+node_modules/
+dist/
+dist-chrome/
+dist-firefox/
+build/
+build-*/
+*.tsbuildinfo
+*.gguf
+*.bin
+*.safetensors
+.env
+.DS_Store
+**/.DS_Store
+*.log
+coverage/
+
+# Vendored engine checkouts (own git history, cloned as a build step — see README.md)
+/llama.cpp/
+/ik_llama.cpp/
+
+# scripts/package-prebuilt.sh output — attached to GitHub Releases, never committed.
+/release-assets/
+
+# Downloaded GGUF model checkpoints (see install.sh / README.md)
+/models/

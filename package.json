@@ -1,0 +1,27 @@
+{
+  "name": "subvocal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tensor-native local coding agent: in-process GGUF inference (CPU + GPU) with AST-aware preprocessing, logit-level steering, speculative decoding, and dual-brain orchestration.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lorenzoperrone/subvocal.git"
+  },
+  "author": "Lorenzo Luca Perrone",
+  "license": "MIT",
+  "workspaces": [
+    "encode",
+    "synapse",
+    "utter",
+    "utter/packages/*"
+  ],
+  "bin": {
+    "subvocal": "bin/subvocal"
+  },
+  "scripts": {
+    "build:synapse": "npm run build -w synapse",
+    "build:encode": "npm run build -w encode",
+    "build": "npm run build:synapse && npm run build:encode",
+    "test": "npm run test -w encode && npm run test -w synapse"
+  }
+}

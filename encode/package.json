@@ -1,0 +1,30 @@
+{
+  "name": "@subvocal/encode",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp src/*.json dist/",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@subvocal/synapse": "file:../synapse",
+    "tree-sitter": "0.22.4",
+    "tree-sitter-python": "0.21.0",
+    "tree-sitter-typescript": "0.21.2",
+    "typescript": "5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "vitest": "3.2.4"
+  }
+}

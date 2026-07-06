@@ -1,0 +1,466 @@
+[
+  {
+    "char": "Ω",
+    "tokenId": 169189
+  },
+  {
+    "char": "λ",
+    "tokenId": 32375
+  },
+  {
+    "char": "§",
+    "tokenId": 17317
+  },
+  {
+    "char": "æ",
+    "tokenId": 8918
+  },
+  {
+    "char": "œ",
+    "tokenId": 49980
+  },
+  {
+    "char": "þ",
+    "tokenId": 169023
+  },
+  {
+    "char": "ð",
+    "tokenId": 65418
+  },
+  {
+    "char": "ß",
+    "tokenId": 7746
+  },
+  {
+    "char": "∈",
+    "tokenId": 169143
+  },
+  {
+    "char": "−",
+    "tokenId": 32160
+  },
+  {
+    "char": "∼",
+    "tokenId": 169558
+  },
+  {
+    "char": "∽",
+    "tokenId": 169120
+  },
+  {
+    "char": "≈",
+    "tokenId": 169103
+  },
+  {
+    "char": "≤",
+    "tokenId": 169629
+  },
+  {
+    "char": "≥",
+    "tokenId": 169553
+  },
+  {
+    "char": "✓",
+    "tokenId": 169361
+  },
+  {
+    "char": "α",
+    "tokenId": 18374
+  },
+  {
+    "char": "β",
+    "tokenId": 49531
+  },
+  {
+    "char": "γ",
+    "tokenId": 57369
+  },
+  {
+    "char": "δ",
+    "tokenId": 82435
+  },
+  {
+    "char": "ε",
+    "tokenId": 29159
+  },
+  {
+    "char": "ζ",
+    "tokenId": 149047
+  },
+  {
+    "char": "η",
+    "tokenId": 40053
+  },
+  {
+    "char": "θ",
+    "tokenId": 85491
+  },
+  {
+    "char": "ι",
+    "tokenId": 28791
+  },
+  {
+    "char": "κ",
+    "tokenId": 65065
+  },
+  {
+    "char": "μ",
+    "tokenId": 41700
+  },
+  {
+    "char": "ξ",
+    "tokenId": 149112
+  },
+  {
+    "char": "π",
+    "tokenId": 46636
+  },
+  {
+    "char": "ρ",
+    "tokenId": 36820
+  },
+  {
+    "char": "σ",
+    "tokenId": 42473
+  },
+  {
+    "char": "τ",
+    "tokenId": 34638
+  },
+  {
+    "char": "υ",
+    "tokenId": 51664
+  },
+  {
+    "char": "φ",
+    "tokenId": 82099
+  },
+  {
+    "char": "χ",
+    "tokenId": 86035
+  },
+  {
+    "char": "ψ",
+    "tokenId": 151339
+  },
+  {
+    "char": "ω",
+    "tokenId": 54968
+  },
+  {
+    "char": "Α",
+    "tokenId": 153061
+  },
+  {
+    "char": "Β",
+    "tokenId": 169054
+  },
+  {
+    "char": "Γ",
+    "tokenId": 168998
+  },
+  {
+    "char": "Δ",
+    "tokenId": 168977
+  },
+  {
+    "char": "Ε",
+    "tokenId": 168953
+  },
+  {
+    "char": "Ζ",
+    "tokenId": 169417
+  },
+  {
+    "char": "Η",
+    "tokenId": 158752
+  },
+  {
+    "char": "Θ",
+    "tokenId": 169091
+  },
+  {
+    "char": "Ι",
+    "tokenId": 153084
+  },
+  {
+    "char": "Κ",
+    "tokenId": 158743
+  },
+  {
+    "char": "Λ",
+    "tokenId": 169042
+  },
+  {
+    "char": "Μ",
+    "tokenId": 168964
+  },
+  {
+    "char": "Ν",
+    "tokenId": 169001
+  },
+  {
+    "char": "Ξ",
+    "tokenId": 169749
+  },
+  {
+    "char": "Ο",
+    "tokenId": 154858
+  },
+  {
+    "char": "Π",
+    "tokenId": 158740
+  },
+  {
+    "char": "Ρ",
+    "tokenId": 158815
+  },
+  {
+    "char": "Σ",
+    "tokenId": 153065
+  },
+  {
+    "char": "Τ",
+    "tokenId": 168956
+  },
+  {
+    "char": "Υ",
+    "tokenId": 158808
+  },
+  {
+    "char": "Φ",
+    "tokenId": 169100
+  },
+  {
+    "char": "Χ",
+    "tokenId": 169086
+  },
+  {
+    "char": "←",
+    "tokenId": 69416
+  },
+  {
+    "char": "↑",
+    "tokenId": 73676
+  },
+  {
+    "char": "→",
+    "tokenId": 49300
+  },
+  {
+    "char": "↓",
+    "tokenId": 76322
+  },
+  {
+    "char": "■",
+    "tokenId": 45113
+  },
+  {
+    "char": "□",
+    "tokenId": 169260
+  },
+  {
+    "char": "▲",
+    "tokenId": 169006
+  },
+  {
+    "char": "▼",
+    "tokenId": 169121
+  },
+  {
+    "char": "◆",
+    "tokenId": 158778
+  },
+  {
+    "char": "◇",
+    "tokenId": 158871
+  },
+  {
+    "char": "●",
+    "tokenId": 42493
+  },
+  {
+    "char": "○",
+    "tokenId": 153089
+  },
+  {
+    "char": "★",
+    "tokenId": 25414
+  },
+  {
+    "char": "☆",
+    "tokenId": 44599
+  },
+  {
+    "char": "░",
+    "tokenId": 81159
+  },
+  {
+    "char": "█",
+    "tokenId": 14757
+  },
+  {
+    "char": "►",
+    "tokenId": 79621
+  },
+  {
+    "char": "一",
+    "tokenId": 95744
+  },
+  {
+    "char": "二",
+    "tokenId": 96053
+  },
+  {
+    "char": "三",
+    "tokenId": 95986
+  },
+  {
+    "char": "四",
+    "tokenId": 96301
+  },
+  {
+    "char": "五",
+    "tokenId": 96311
+  },
+  {
+    "char": "六",
+    "tokenId": 96752
+  },
+  {
+    "char": "七",
+    "tokenId": 96822
+  },
+  {
+    "char": "八",
+    "tokenId": 96702
+  },
+  {
+    "char": "九",
+    "tokenId": 96838
+  },
+  {
+    "char": "十",
+    "tokenId": 96075
+  },
+  {
+    "char": "百",
+    "tokenId": 96319
+  },
+  {
+    "char": "千",
+    "tokenId": 96617
+  },
+  {
+    "char": "万",
+    "tokenId": 96321
+  },
+  {
+    "char": "上",
+    "tokenId": 95802
+  },
+  {
+    "char": "下",
+    "tokenId": 95849
+  },
+  {
+    "char": "左",
+    "tokenId": 97161
+  },
+  {
+    "char": "右",
+    "tokenId": 97050
+  },
+  {
+    "char": "中",
+    "tokenId": 95789
+  },
+  {
+    "char": "大",
+    "tokenId": 95779
+  },
+  {
+    "char": "小",
+    "tokenId": 95872
+  },
+  {
+    "char": "月",
+    "tokenId": 96212
+  },
+  {
+    "char": "日",
+    "tokenId": 95971
+  },
+  {
+    "char": "年",
+    "tokenId": 95859
+  },
+  {
+    "char": "水",
+    "tokenId": 95936
+  },
+  {
+    "char": "火",
+    "tokenId": 96405
+  },
+  {
+    "char": "木",
+    "tokenId": 96742
+  },
+  {
+    "char": "金",
+    "tokenId": 96012
+  },
+  {
+    "char": "土",
+    "tokenId": 96678
+  },
+  {
+    "char": "山",
+    "tokenId": 96144
+  },
+  {
+    "char": "川",
+    "tokenId": 97831
+  },
+  {
+    "char": "石",
+    "tokenId": 96454
+  },
+  {
+    "char": "田",
+    "tokenId": 97211
+  },
+  {
+    "char": "天",
+    "tokenId": 95913
+  },
+  {
+    "char": "地",
+    "tokenId": 95852
+  },
+  {
+    "char": "人",
+    "tokenId": 95765
+  },
+  {
+    "char": "子",
+    "tokenId": 95874
+  },
+  {
+    "char": "女",
+    "tokenId": 96350
+  },
+  {
+    "char": "父",
+    "tokenId": 97391
+  },
+  {
+    "char": "母",
+    "tokenId": 96939
+  },
+  {
+    "char": "友",
+    "tokenId": 96419
+  }
+]

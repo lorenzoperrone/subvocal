@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+
+# Subvocal: Native Tensor Bridge entry point
+# Boots the Utter TUI, which internally loads the GGUF model via FFI
+# and uses the AgentLoop pipeline.
+
+# Resolve real path of the script even if it's symlinked
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+# Check if the GGUF model exists
+if [ -z "$SUBVOCAL_LOCAL_MODEL" ]; then
+  # Automatically point to the 12B or E2B model inside the monorepo's models folder
+  DEFAULT_MODEL="$DIR/../models/unsloth-gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
+  if [ ! -f "$DEFAULT_MODEL" ]; then
+    DEFAULT_MODEL="$DIR/../models/unsloth-gemma-4-E2B-it-qat-GGUF/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"
+  fi
+  if [ ! -f "$DEFAULT_MODEL" ]; then
+    echo "⚠️  Warning: The default GGUF model file was not found in $DIR/../models/"
+    echo "To start the agent, set the SUBVOCAL_LOCAL_MODEL environment variable with the path to your local GGUF model on this Mac."
+    echo ""
+    echo "Example: SUBVOCAL_LOCAL_MODEL=/path/to/gemma-4-26B.gguf subvocal"
+    exit 1
+  fi
+  export SUBVOCAL_LOCAL_MODEL="$DEFAULT_MODEL"
+fi
+
+# MEMORY: enable the ISWA 2-tier KV split (SWA layers → VRAM, global KV → RAM) that pairs with
+# the model's noKvOffload=true. Without this a 16 GB M2 Pro OOMs on the Metal command buffer
+# during generation. Compact-SWA (patch 102) must be in the llama.cpp build for this to help.
+export LLAMA_KV_SWA_OFFLOAD="${LLAMA_KV_SWA_OFFLOAD:-1}"
+
+# SSD-backed KV with a hit-rate hot/cold manager (doc/research/kv-ssd-mmap.md). One switch:
+# SUBVOCAL_KV_SSD=1 → the KV cache lives on an mmap'd SSD file (no hard RAM-OOM when it grows)
+# and a manager thread pins the hottest chunks in RAM (mincore hit-rate → mlock, 2 GiB default).
+# Zero decode penalty while the KV fits the page cache (measured 12B @16k: 8.6 vs 8.5 tk/s).
+if [ "${SUBVOCAL_KV_SSD:-0}" = "1" ]; then
+  export SUBVOCAL_KV_MMAP=1
+  export SUBVOCAL_KV_HOTCOLD="${SUBVOCAL_KV_HOTCOLD:-1}"
+  export SUBVOCAL_KV_HOT_MB="${SUBVOCAL_KV_HOT_MB:-2048}"
+fi
+
+# Build-on-first-run: dist/ is not committed (and needs tsgo from the workspace), so a fresh
+# clone bootstraps here. Also rebuilds encode's dist when its sources are newer — the provider
+# consumes @subvocal/encode via its built output.
+AGENT_DIR="$DIR/../utter/packages/coding-agent"
+CLI="$AGENT_DIR/dist/cli.js"
+REPO_ROOT="$DIR/.."
+
+if [ ! -d "$REPO_ROOT/node_modules" ]; then
+  echo "▸ First run: installing workspace dependencies (npm install)..."
+  (cd "$REPO_ROOT" && npm install) || { echo "npm install failed"; exit 1; }
+fi
+
+if [ ! -f "$REPO_ROOT/encode/dist/index.js" ] || [ -n "$(find "$REPO_ROOT/encode/src" -name '*.ts' -newer "$REPO_ROOT/encode/dist/index.js" 2>/dev/null | head -1)" ]; then
+  echo "▸ Compiling @subvocal/encode..."
+  (cd "$REPO_ROOT/encode" && npm run build) || { echo "build of encode failed"; exit 1; }
+fi
+
+if [ ! -f "$CLI" ] || [ -n "$(find "$AGENT_DIR/src" -name '*.ts' -newer "$CLI" 2>/dev/null | head -1)" ]; then
+  echo "▸ Compiling the TUI (utter/coding-agent)..."
+  (cd "$AGENT_DIR" && npm run build) || { echo "build of TUI failed"; exit 1; }
+fi
+
+# Optional read-only "monitor" window. SUBVOCAL_MONITOR=1 → structured activity feed (what the
+# agent writes and where); SUBVOCAL_MONITOR=raw → the literal decode stream. We write a small
+# .command script and `open` it — this launches a new Terminal window WITHOUT needing the macOS
+# Automation permission that `osascript … tell application "Terminal"` requires (that permission,
+# denied-by-default and prompted only interactively, is why the osascript approach failed silently).
+if [ -n "$SUBVOCAL_MONITOR" ]; then
+  export SUBVOCAL_MONITOR_LOG="${SUBVOCAL_MONITOR_LOG:-/tmp/subvocal-activity.log}"
+  : > "$SUBVOCAL_MONITOR_LOG"   # truncate for this session
+  [ "$SUBVOCAL_MONITOR" = "raw" ] && MON_LABEL="raw decode stream" || MON_LABEL="activity"
+  MON_CMD="/tmp/subvocal-monitor.command"
+  cat > "$MON_CMD" <<CMD
+#!/bin/bash
+printf '\033]0;Subvocal monitor\007'   # window title
+clear
+echo "── Subvocal monitor ($MON_LABEL) — read-only ──"
+echo "(feed: $SUBVOCAL_MONITOR_LOG)"
+echo
+exec tail -n +1 -f "$SUBVOCAL_MONITOR_LOG"
+CMD
+  chmod +x "$MON_CMD"
+  if open "$MON_CMD" 2>/dev/null; then
+    echo "▸ Monitor: opening a second window (${MON_LABEL})."
+  else
+    echo "▸ Monitor active. Manually open a window and run:  tail -f $SUBVOCAL_MONITOR_LOG"
+  fi
+fi
+
+exec node "$CLI" --provider subvocal-local --model subvocal-local-gemma "$@"

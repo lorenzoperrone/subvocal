@@ -1,0 +1,29 @@
+{
+  "name": "@subvocal/synapse",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "build/Release/*.node", "src/native", "CMakeLists.txt"],
+  "scripts": {
+    "build:cpu": "cmake-js compile --out build-cpu --CDSUBVOCAL_BACKEND=cpu",
+    "build:gpu": "cmake-js compile --out build-gpu --CDSUBVOCAL_BACKEND=gpu",
+    "build:metal": "cmake-js compile --out build-metal --CDSUBVOCAL_BACKEND=metal",
+    "rebuild:cpu": "cmake-js rebuild --out build-cpu --CDSUBVOCAL_BACKEND=cpu",
+    "rebuild:gpu": "cmake-js rebuild --out build-gpu --CDSUBVOCAL_BACKEND=gpu",
+    "rebuild:metal": "cmake-js rebuild --out build-metal --CDSUBVOCAL_BACKEND=metal",
+    "build:ts": "tsgo --noEmit false -p tsconfig.json",
+    "build": "npm run build:metal && npm run build:ts",
+    "clean": "shx rm -rf dist build build-cpu build-gpu",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "node-addon-api": "8.3.0"
+  },
+  "devDependencies": {
+    "cmake-js": "7.3.0",
+    "vitest": "2.1.9"
+  }
+}
