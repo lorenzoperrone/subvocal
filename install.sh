@@ -91,7 +91,7 @@ else
     NODE_VERSION="$(node -p 'process.version.slice(1)')"
     PKG_VERSION="$(node -p "require('./package.json').version")"
     BUNDLE_NAME="subvocal-macos-arm64-node${NODE_VERSION}.zip"
-    BUNDLE_URL="https://github.com/${REPO_SLUG}/releases/download/v${PKG_VERSION}/${BUNDLE_NAME}"
+    BUNDLE_URL="https://github.com/${REPO_SLUG}/releases/download/${PKG_VERSION}/${BUNDLE_NAME}"
 
     log "Looking for a full prebuilt bundle (exact Node ${NODE_VERSION} match) at $BUNDLE_URL ..."
     TMP_DIR="$(mktemp -d)"
@@ -165,7 +165,7 @@ if [ "$BUNDLE_OK" -ne 1 ]; then
     PKG_VERSION="$(node -p "require('./package.json').version")"
     REPO_SLUG="$(github_slug)"
     ASSET="subvocal-synapse-metal-node${NODE_ABI}-darwin-arm64.tar.gz"
-    ASSET_URL="https://github.com/${REPO_SLUG}/releases/download/v${PKG_VERSION}/${ASSET}"
+    ASSET_URL="https://github.com/${REPO_SLUG}/releases/download/${PKG_VERSION}/${ASSET}"
 
     PREBUILT_OK=0
     if [ -n "$REPO_SLUG" ] && [[ "$REPO_SLUG" != *"<"* ]]; then
@@ -205,7 +205,11 @@ if [ "$BUNDLE_OK" -ne 1 ]; then
       done
 
       log "Building llama.cpp (Metal)..."
-      cmake -B "$ROOT/llama.cpp/build" -S "$ROOT/llama.cpp" -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
+      # -ffile-prefix-map strips this machine's absolute checkout path from __FILE__/assert
+      # strings baked into the compiled static libs, so it doesn't end up embedded in the addon.
+      cmake -B "$ROOT/llama.cpp/build" -S "$ROOT/llama.cpp" -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS="-ffile-prefix-map=${ROOT}=/subvocal" \
+        -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${ROOT}=/subvocal"
       cmake --build "$ROOT/llama.cpp/build" --target llama -j "$(sysctl -n hw.ncpu)"
 
       log "Compiling the synapse addon (cmake-js)..."

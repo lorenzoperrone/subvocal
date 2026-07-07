@@ -1,6 +1,6 @@
 {
   "name": "subvocal",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Tensor-native local coding agent: in-process GGUF inference (CPU + GPU) with AST-aware preprocessing, logit-level steering, speculative decoding, and dual-brain orchestration.",
   "repository": {

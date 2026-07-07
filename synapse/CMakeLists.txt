@@ -8,6 +8,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Strip the local checkout's absolute path from __FILE__/assert/debug-info strings baked into
+# the compiled addon — without this, every user's own home-directory path ends up embedded in
+# the shipped binary. Applies to synapse's own sources; llama.cpp's static libs get the matching
+# flag from their own build invocation (see install.sh).
+get_filename_component(SUBVOCAL_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+add_compile_options(-ffile-prefix-map=${SUBVOCAL_REPO_ROOT}=/subvocal)
+
 # Backend selection — pass via -DSUBVOCAL_BACKEND=cpu|gpu|metal
 if(NOT DEFINED SUBVOCAL_BACKEND)
   set(SUBVOCAL_BACKEND "cpu" CACHE STRING "Backend: cpu (ik_llama static), gpu (llama.cpp static + CUDA), or metal (llama.cpp static + Metal, Apple Silicon)")
@@ -32,7 +39,7 @@ include_directories(${NODE_ADDON_API_DIR})
 
 # ---- Backend dispatch ----
 if(SUBVOCAL_BACKEND STREQUAL "cpu")
-  set(BACKEND_DIR "/home/lorenzo/Projects/subvocal/ik_llama.cpp" CACHE PATH "ik_llama.cpp root")
+  set(BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ik_llama.cpp" CACHE PATH "ik_llama.cpp root")
   set(BACKEND_BUILD "${BACKEND_DIR}/build-static")
   set(SOURCE_FILES "src/native/binding.cpp" "src/native/logits_processor.cpp" "src/native/kv_cache.cpp" "src/native/suffix_tree_wrapper.cpp" "src/native/text_scanner.cpp")
   set(ADDON_NAME "subvocal_ffi_cpu")
@@ -43,7 +50,7 @@ if(SUBVOCAL_BACKEND STREQUAL "cpu")
   )
 
 elseif(SUBVOCAL_BACKEND STREQUAL "gpu")
-  set(BACKEND_DIR "/home/lorenzo/Projects/subvocal/llama.cpp" CACHE PATH "llama.cpp upstream root")
+  set(BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../llama.cpp" CACHE PATH "llama.cpp upstream root")
   set(BACKEND_BUILD "${BACKEND_DIR}/build")
   add_definitions(-DSUBVOCAL_UPSTREAM_LLAMA)
   set(SOURCE_FILES "src/native/binding_gpu.cpp" "src/native/logits_processor.cpp" "src/native/kv_cache.cpp" "src/native/cuda_kernels.cu" "src/native/suffix_tree_wrapper.cpp" "src/native/text_scanner.cpp")
