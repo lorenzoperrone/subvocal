@@ -46,7 +46,7 @@ export interface ReplayTurn {
 }
 
 /** Default disk budget for the auto-constructed cold store (see AgentLoopConfig.coldStore). */
-const DEFAULT_COLD_STORE_BUDGET_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
+const DEFAULT_COLD_STORE_BUDGET_BYTES = 4 * 1024 * 1024 * 1024; // 4 GiB
 
 /** M3.7: checkpoint ladder granularity — a rung roughly every this many tokens. */
 const COLD_BLOCK_TOKENS = 4096;

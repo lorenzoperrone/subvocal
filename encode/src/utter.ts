@@ -118,7 +118,7 @@ export interface UtterSession {
 	/** M12.2: E2B generator model + loop, present only when config.dualBrain is set. */
 	smallGenModel?: ModelGPU | null;
 	smallLoop?: AgentLoop | null;
-	/** M12.3: E2B drafter instance (SUBVOCAL_DRAFT=on) — shadow context for two-model specdec. */
+	/** M12.3: E2B drafter instance (default on, SUBVOCAL_DRAFT=off to disable) — shadow context for two-model specdec. */
 	draftModel?: ModelGPU | null;
 	/** M12.2: which brain ran the LAST runTask() turn — REPL follow-ups must go to the loop
 	 *  whose KV actually holds the conversation, not unconditionally to the large one. */
@@ -188,19 +188,19 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 	});
 	const largeModel = getLargeModel();
 
-	// M12.3: optional E2B drafter for two-model speculative decoding (1.90x measured,
-	// doc/research/exclusions-sweep-2026-07.md). Opt-in via SUBVOCAL_DRAFT=on: it costs the
-	// E2B weights (2.4 GiB mmap, shared with any other E2B instance) plus a shadow KV sized
+	// M12.3: E2B drafter for two-model speculative decoding (1.90x measured,
+	// doc/research/exclusions-sweep-2026-07.md), on by default — opt out with SUBVOCAL_DRAFT=off.
+	// It costs the E2B weights (2.4 GiB mmap, shared with any other E2B instance) plus a shadow KV sized
 	// to the large model's live context. Deliberately its OWN instance — the M11.2 classifier
 	// and the M12.2 smallGenModel have their own KV lifecycles a drafter would clobber.
 	let draftModel: ModelGPU | null = null;
-	if ((process.env.SUBVOCAL_DRAFT ?? 'off') === 'on') {
+	if ((process.env.SUBVOCAL_DRAFT ?? 'on') !== 'off') {
 		draftModel = new ModelGPU(config.smallModelPath, {
 			contextSize: largeCtx ?? activeProfile.largeOpts.contextSize,
 			threads: 4,
 			gpuLayers: 999,
 		});
-		console.log('[draft] E2B drafter loaded (SUBVOCAL_DRAFT=on): two-model specdec active');
+		console.log('[draft] E2B drafter loaded (default ON): two-model specdec active');
 	}
 
 	const loop = new AgentLoop({

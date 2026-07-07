@@ -325,7 +325,7 @@ export function registerLocalProviderModels(registry: ProviderRegistrar): void {
 	// the statusbar % and the harness's auto-compaction budget disagree with the real window.
 	const contextWindow = process.env.SUBVOCAL_LOCAL_CTX
 		? Number(process.env.SUBVOCAL_LOCAL_CTX)
-		: process.env.SUBVOCAL_LOCAL_DRAFT === "1" || process.env.SUBVOCAL_LOCAL_DUAL_BRAIN === "1"
+		: process.env.SUBVOCAL_LOCAL_DRAFT !== "0" || process.env.SUBVOCAL_LOCAL_DUAL_BRAIN !== "0"
 			? 16384
 			: 32768;
 	registry.registerProvider(SUBVOCAL_LOCAL_PROVIDER, {

@@ -375,7 +375,7 @@ export class LocalConversationEngine {
 	 */
 	private resolveContextSize(): number {
 		if (process.env.SUBVOCAL_LOCAL_CTX) return Number(process.env.SUBVOCAL_LOCAL_CTX);
-		return process.env.SUBVOCAL_LOCAL_DRAFT === "1" || DUAL_BRAIN_ENABLED
+		return process.env.SUBVOCAL_LOCAL_DRAFT !== "0" || DUAL_BRAIN_ENABLED
 			? (activeProfile.dualBrainMaxCtx ?? 16384)
 			: 32768;
 	}
@@ -438,14 +438,14 @@ export class LocalConversationEngine {
 	}
 
 	/**
-	 * M12.3: optional E2B drafter for two-model speculative decoding (SUBVOCAL_LOCAL_DRAFT=1;
-	 * 1.90x measured on edit-shaped prompts, output identical to plain greedy — see
+	 * M12.3: E2B drafter for two-model speculative decoding, on by default (SUBVOCAL_LOCAL_DRAFT=0
+	 * to disable; 1.90x measured on edit-shaped prompts, output identical to plain greedy — see
 	 * doc/research/exclusions-sweep-2026-07.md). Same shared instance as the generator:
 	 * AgentLoop's draftPrefill() re-prefills the shadow from scratch (forward() clears KV),
 	 * so whatever a previous role left in the context is overwritten before use.
 	 */
 	private getDraftModel(): ModelGPU | null {
-		if (process.env.SUBVOCAL_LOCAL_DRAFT !== "1") return null;
+		if (process.env.SUBVOCAL_LOCAL_DRAFT === "0") return null;
 		return this.getE2B();
 	}
 

@@ -67,12 +67,14 @@ if [ ! -f "$CLI" ] || [ -n "$(find "$AGENT_DIR/src" -name '*.ts' -newer "$CLI" 2
   (cd "$AGENT_DIR" && npm run build) || { echo "build of TUI failed"; exit 1; }
 fi
 
-# Optional read-only "monitor" window. SUBVOCAL_MONITOR=1 → structured activity feed (what the
-# agent writes and where); SUBVOCAL_MONITOR=raw → the literal decode stream. We write a small
-# .command script and `open` it — this launches a new Terminal window WITHOUT needing the macOS
-# Automation permission that `osascript … tell application "Terminal"` requires (that permission,
-# denied-by-default and prompted only interactively, is why the osascript approach failed silently).
-if [ -n "$SUBVOCAL_MONITOR" ]; then
+# Read-only "monitor" window, on by default: structured activity feed (what the agent writes and
+# where). SUBVOCAL_MONITOR=raw → the literal decode stream instead. SUBVOCAL_MONITOR=0 (or "off")
+# → disable it. We write a small .command script and `open` it — this launches a new Terminal
+# window WITHOUT needing the macOS Automation permission that `osascript … tell application
+# "Terminal"` requires (that permission, denied-by-default and prompted only interactively, is why
+# the osascript approach failed silently).
+SUBVOCAL_MONITOR="${SUBVOCAL_MONITOR:-1}"
+if [ "$SUBVOCAL_MONITOR" != "0" ] && [ "$SUBVOCAL_MONITOR" != "off" ]; then
   export SUBVOCAL_MONITOR_LOG="${SUBVOCAL_MONITOR_LOG:-/tmp/subvocal-activity.log}"
   : > "$SUBVOCAL_MONITOR_LOG"   # truncate for this session
   [ "$SUBVOCAL_MONITOR" = "raw" ] && MON_LABEL="raw decode stream" || MON_LABEL="activity"
