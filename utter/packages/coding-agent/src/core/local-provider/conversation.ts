@@ -61,6 +61,15 @@ const IDEOGRAM_ENABLED = process.env.SUBVOCAL_IDEOGRAM === "1";
 // one swaps which model generates the whole turn.
 const DUAL_BRAIN_ENABLED = process.env.SUBVOCAL_LOCAL_DUAL_BRAIN === "1";
 
+// 2026-07-07: idle-unload the shared E2B (weights + KV, ~2.7-2.9 GiB) after this many ms of no
+// use — measured RAM/swap pressure on a 16 GB machine running both models resident for a whole
+// session (doc/epics/EPIC-M3's asymmetric-context follow-up). 3 min survives normal think-time
+// between turns without reloading on every message; SUBVOCAL_LOCAL_E2B_IDLE_MS overrides,
+// SUBVOCAL_LOCAL_E2B_IDLE_MS=0 disables (keep the old always-resident behavior).
+const E2B_IDLE_UNLOAD_MS = process.env.SUBVOCAL_LOCAL_E2B_IDLE_MS
+	? Number(process.env.SUBVOCAL_LOCAL_E2B_IDLE_MS)
+	: 180_000;
+
 // M11.3: model-backed intent classification on the shared E2B's isolated aux sequence
 // (classifyIntentOnAuxSeq — variant (b), measured GO: 0.0pp accuracy delta vs standalone at
 // every tested conversation length, see doc/substories/M11.3-intent-classifier-shared-e2b.md).
@@ -313,6 +322,11 @@ export class LocalConversationEngine {
 	// context (KV + compute buffers + SWA cache), which is what OOM'd the 16 GB machine when
 	// three instances sat next to the 12B (see warm()).
 	private e2b: ModelGPU | null = null;
+	/** 2026-07-07: idle-unload timer for the E2B (see scheduleE2BIdleUnload()) — reclaims its
+	 *  ~2.7-2.9 GiB (weights + KV) during genuinely idle stretches instead of holding it resident
+	 *  for the whole session. Reset on every getE2B() call; fires free() + null after
+	 *  E2B_IDLE_UNLOAD_MS of no further use. getE2B()'s existing lazy-create handles the reload. */
+	private e2bIdleTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Which brain generated the CURRENT conversation's turns — set when a fresh loop is built. */
 	private currentBrain: Brain = "large";
 	/** M13.4: buffers the small brain's FIRST step stream until the escalation decision — an
@@ -411,7 +425,8 @@ export class LocalConversationEngine {
 
 	/**
 	 * The shared E2B instance (see the field comment). Lazy: loaded on the first turn that
-	 * needs any small-model role; freed with everything else in agent-worker's teardown path.
+	 * needs any small-model role; also freed early after E2B_IDLE_UNLOAD_MS of inactivity
+	 * (scheduleE2BIdleUnload()) to reclaim its RAM between bursts of use, not just at teardown.
 	 * Context = resolveE2BContextSize() (own window, independent of the 12B's — see that
 	 * method's comment). As a drafter, a shadow KV wider than the target it's shadowing is
 	 * fine: it only ever holds as much conversation as the 12B actually has.
@@ -425,9 +440,32 @@ export class LocalConversationEngine {
 	 * risk the flag being flipped after this lazy singleton already loaded without it.
 	 */
 	private getE2B(): ModelGPU {
-		if (this.e2b) return this.e2b;
-		this.e2b = new ModelGPU(MacE2BProfile.largeModelPath, { ...MacE2BProfile.largeOpts, contextSize: this.resolveE2BContextSize(), auxSeq: true });
+		if (!this.e2b) {
+			this.e2b = new ModelGPU(MacE2BProfile.largeModelPath, { ...MacE2BProfile.largeOpts, contextSize: this.resolveE2BContextSize(), auxSeq: true });
+		}
+		this.scheduleE2BIdleUnload();
 		return this.e2b;
+	}
+
+	/**
+	 * Reset (or start) the idle-unload countdown — called on every getE2B(), so any actual use
+	 * pushes the deadline back. E2B_IDLE_UNLOAD_MS<=0 disables it (old always-resident behavior).
+	 * A stale timer racing a manual free() elsewhere (M13.4's error-recovery path) is harmless:
+	 * it just finds `this.e2b` already null and no-ops; the next getE2B() reschedules fresh.
+	 * .unref() so the pending timer never keeps the worker thread's event loop alive on its own.
+	 */
+	private scheduleE2BIdleUnload(): void {
+		if (this.e2bIdleTimer) clearTimeout(this.e2bIdleTimer);
+		if (E2B_IDLE_UNLOAD_MS <= 0) return;
+		this.e2bIdleTimer = setTimeout(() => {
+			this.e2bIdleTimer = null;
+			if (!this.e2b) return;
+			try {
+				this.e2b.free();
+			} catch { /* best-effort */ }
+			this.e2b = null;
+		}, E2B_IDLE_UNLOAD_MS);
+		this.e2bIdleTimer.unref();
 	}
 
 	/**
