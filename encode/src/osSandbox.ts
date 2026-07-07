@@ -115,11 +115,16 @@ export function deadMansSwitch(
 // ── Unified diff (zero dependencies) ───────────────────────────────────────────
 
 /**
- * Compute a basic unified diff between two strings.
- * Produces output in unified diff format:
- *   @@ -a,b +c,d @@
- *   -removed line
- *   +added line
+ * Compute a unified diff between two strings.
+ *
+ * 2026-07 audit: the previous implementation used a fixed ~8-line window around each change and
+ * emitted every line in that window as removed AND added — so a changed region longer than the
+ * window rendered unchanged lines as -/+ pairs (a wrong, misleading diff). This version trims the
+ * common line prefix and suffix and shows only the genuinely differing middle (old lines removed,
+ * new lines added) with up to `ctx` lines of surrounding context. It is always CORRECT — a line
+ * equal on both sides is never shown as changed — though not minimal for changes scattered across
+ * a file (those collapse into one hunk). Fine for the human-facing `:diff` / follow-up display
+ * this feeds; nothing conditions on its exact hunk shape.
  */
 export function computeDiff(oldText: string, newText: string, filePath = 'file'): string {
 	if (oldText === newText) return '';
@@ -127,112 +132,44 @@ export function computeDiff(oldText: string, newText: string, filePath = 'file')
 	const oldLines = oldText.split('\n');
 	const newLines = newText.split('\n');
 	const ctx = 3;
-	const hunks: string[] = [];
 
-	// Compute an edit script using a simple greedy scan.
-	// Walk both sequences simultaneously: skip matching lines, emit hunks
-	// for changed regions. Handles files of different lengths correctly by
-	// treating missing trailing lines as deletions or insertions.
-	let i = 0;  // index into oldLines
-	let j = 0;  // index into newLines
+	// Common prefix: lines identical from the top.
+	let p = 0;
+	while (p < oldLines.length && p < newLines.length && oldLines[p] === newLines[p]) p++;
 
-	while (i < oldLines.length || j < newLines.length) {
-		// Count matching prefix at current positions
-		let common = 0;
-		while (
-			i + common < oldLines.length &&
-			j + common < newLines.length &&
-			oldLines[i + common] === newLines[j + common]
-		) {
-			common++;
-		}
-
-		// Large common block: skip it (only keep context lines at boundaries)
-		if (common > ctx * 2 + 5) {
-			i += common;
-			j += common;
-			continue;
-		}
-
-		if (i >= oldLines.length && j >= newLines.length) break;
-
-		// Emit a changed hunk: include context + a window of changed lines
-		const oldHunkStart = Math.max(0, i - ctx);
-		const oldHunkEnd   = Math.min(oldLines.length, i + ctx + 8);
-		const newHunkEnd   = Math.min(newLines.length, j + ctx + 8 + (newLines.length - oldLines.length));
-
-		const lines: string[] = [];
-		const newHunkStart = Math.max(0, j - ctx);
-
-		// Context before change
-		for (let k = oldHunkStart; k < i; k++) lines.push(` ${oldLines[k]}`);
-		// Removed lines
-		for (let k = i; k < oldHunkEnd; k++) lines.push(`-${oldLines[k]}`);
-		// Added lines
-		for (let k = j; k < newHunkEnd; k++) lines.push(`+${newLines[k]}`);
-		// Context after change
-		let ctxAfter = 0;
-		while (
-			oldHunkEnd + ctxAfter < oldLines.length &&
-			newHunkEnd + ctxAfter < newLines.length &&
-			oldLines[oldHunkEnd + ctxAfter] === newLines[newHunkEnd + ctxAfter] &&
-			ctxAfter < ctx
-		) {
-			lines.push(` ${oldLines[oldHunkEnd + ctxAfter]}`);
-			ctxAfter++;
-		}
-
-		const oldRangeLen = oldHunkEnd - oldHunkStart + ctxAfter;
-		const newRangeLen = (newHunkEnd - newHunkStart) + ctxAfter;
-		hunks.push(
-			`--- ${filePath}\n+++ ${filePath}\n` +
-			`@@ -${oldHunkStart + 1},${oldRangeLen} +${newHunkStart + 1},${newRangeLen} @@\n` +
-			lines.join('\n') + '\n',
-		);
-
-		i = oldHunkEnd + ctxAfter;
-		j = newHunkEnd + ctxAfter;
+	// Common suffix: lines identical from the bottom, not overlapping the prefix.
+	let s = 0;
+	while (
+		s < oldLines.length - p &&
+		s < newLines.length - p &&
+		oldLines[oldLines.length - 1 - s] === newLines[newLines.length - 1 - s]
+	) {
+		s++;
 	}
 
-	return hunks.join('');
-}
+	// Changed region: old[p .. oldLines.length - s), new[p .. newLines.length - s).
+	const oldChangeEnd = oldLines.length - s;
+	const newChangeEnd = newLines.length - s;
 
-function formatHunk(
-	oldLines: string[],
-	newLines: string[],
-	hunkStart: number,
-	hunkEnd: number,
-	oldPos: number,
-	newPos: number,
-	filePath: string,
-): string {
-	const lines: string[] = [];
+	// Context bounds (clamped so we never re-show removed/added lines as context).
+	const ctxStart = Math.max(0, p - ctx);
+	const oldCtxEnd = Math.min(oldLines.length, oldChangeEnd + ctx);
+	const newCtxEnd = Math.min(newLines.length, newChangeEnd + ctx);
 
-	const oldRangeStart = hunkStart + 1;
-	const oldRangeLen = hunkEnd - hunkStart;
-	const newRangeStart = newPos + 1;
-	const newRangeLen = oldRangeLen;
+	const body: string[] = [];
+	for (let k = ctxStart; k < p; k++) body.push(` ${oldLines[k]}`);          // leading context
+	for (let k = p; k < oldChangeEnd; k++) body.push(`-${oldLines[k]}`);       // removed
+	for (let k = p; k < newChangeEnd; k++) body.push(`+${newLines[k]}`);       // added
+	// Trailing context is shared (identical on both sides), read from oldLines.
+	for (let k = oldChangeEnd; k < oldCtxEnd; k++) body.push(` ${oldLines[k]}`);
 
-	lines.push(`--- ${filePath}\n`);
-	lines.push(`+++ ${filePath}\n`);
-	lines.push(`@@ -${oldRangeStart},${oldRangeLen} +${newRangeStart},${newRangeLen} @@\n`);
-
-	for (let i = hunkStart; i < hunkEnd; i++) {
-		const oldLine = i < oldLines.length ? oldLines[i] : undefined;
-		const newIdx = newPos + (i - oldPos);
-		const newLine = newIdx >= 0 && newIdx < newLines.length ? newLines[newIdx] : undefined;
-
-		if (oldLine !== undefined && oldLine === newLine) {
-			lines.push(` ${oldLine}\n`);
-		} else {
-			if (oldLine !== undefined) {
-				lines.push(`-${oldLine}\n`);
-			}
-			if (newLine !== undefined) {
-				lines.push(`+${newLine}\n`);
-			}
-		}
-	}
-
-	return lines.join('');
+	// Trailing context count is the same on both sides (it's the shared common suffix), so each
+	// range length is just its own (context-clamped) span from ctxStart.
+	const oldRangeLen = oldCtxEnd - ctxStart;
+	const newRangeLen = newCtxEnd - ctxStart;
+	return (
+		`--- ${filePath}\n+++ ${filePath}\n` +
+		`@@ -${ctxStart + 1},${oldRangeLen} +${ctxStart + 1},${newRangeLen} @@\n` +
+		body.join('\n') + '\n'
+	);
 }

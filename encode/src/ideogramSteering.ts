@@ -272,6 +272,19 @@ export class IdeogramSteering {
 	}
 
 	/**
+	 * Public poison check for the speculative-decode batch path (2026-07 audit). The plain
+	 * per-token loop rejects poison tokens inside sample(); tokens that arrive already-decoded
+	 * from mtpVerifyBatch never pass through sample(), so the verified-batch scan in AgentLoop
+	 * calls this directly to catch a degenerate turn-marker the observer would otherwise let
+	 * into the KV. Side effect matches sample()'s: a non-poison token is accumulated into the
+	 * running text, so multi-token poison patterns stay detectable across the batch too (the
+	 * old batch path never updated accumulatedText, blinding those checks).
+	 */
+	checkPoison(token: number): boolean {
+		return this.isPoison(token);
+	}
+
+	/**
 	 * Check if a token would produce text that matches known poison patterns.
 	 * We detokenize the accumulated text + new token and check against regex.
 	 */

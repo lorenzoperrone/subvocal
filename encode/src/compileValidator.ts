@@ -60,12 +60,23 @@ function checkPython(content: string): CompileResult {
 	try {
 		writeFileSync(tmpPath, content, 'utf-8');
 
-		const result = spawnSync('python', ['-m', 'py_compile', tmpPath], {
-			encoding: 'utf-8',
-			timeout: 10_000,
-		});
+		// Prefer python3 (the interpreter macOS actually ships; bare `python` is often absent),
+		// fall back to `python`. 2026-07 audit: a missing interpreter sets result.error (ENOENT)
+		// and result.status === null — the old `status === 0` check treated that as a COMPILE
+		// FAILURE, so on any machine without the named binary EVERY Python edit was rolled back
+		// and retried forever. A missing/unrunnable compiler must SKIP the check (tree-sitter
+		// already covered structural syntax), never reject the code.
+		let result = spawnSync('python3', ['-m', 'py_compile', tmpPath], { encoding: 'utf-8', timeout: 10_000 });
+		if (result.error) {
+			result = spawnSync('python', ['-m', 'py_compile', tmpPath], { encoding: 'utf-8', timeout: 10_000 });
+		}
 
 		const durationMs = performance.now() - t0;
+
+		// Interpreter not found, killed by the timeout, or otherwise never produced a verdict.
+		if (result.error || result.status === null) {
+			return { ok: true, message: '', tool: 'skipped', durationMs };
+		}
 
 		if (result.status === 0) {
 			return { ok: true, message: '', tool: 'py_compile', durationMs };

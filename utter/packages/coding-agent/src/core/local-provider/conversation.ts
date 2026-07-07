@@ -29,8 +29,6 @@ import {
 	insertAfterNode,
 	renameASTNode,
 	type IntentResult,
-	KVCacheManager,
-	LineCRCCache,
 	MacE2BProfile,
 	BASH_FAIL_CHAR,
 	BASH_PASS_CHAR,
@@ -197,8 +195,16 @@ function renderAssistantText(msg: Message): string {
 			parts.push(raw.text);
 		} else if (raw.type === "toolCall") {
 			const name = String(raw.name ?? "");
+			// 2026-07 audit: quote-wrap ONLY string values (the native protocol's `<|"|>` marker is
+			// for strings). Numbers/booleans go bare — parseNativeArgs reads them from the structural
+			// segments and coerces the type back, so a replayed `startLine:5` round-trips as the
+			// number 5, not the string "5" a quoted render would have produced (type drift that only
+			// costs cold-store checkpoint hits, but free to get right).
 			const args = Object.entries((raw.arguments as Record<string, unknown>) ?? {})
-				.map(([k, v]) => `${k}:<|"|>${typeof v === "string" ? v : JSON.stringify(v)}<|"|>`)
+				.map(([k, v]) =>
+					typeof v === "string" ? `${k}:<|"|>${v}<|"|>`
+					: (typeof v === "number" || typeof v === "boolean") ? `${k}:${v}`
+					: `${k}:<|"|>${JSON.stringify(v)}<|"|>`)
 				.join(",");
 			parts.push(`<|tool_call>call:${name}{${args}}<tool_call|>`);
 		}
@@ -327,6 +333,13 @@ export class LocalConversationEngine {
 	 *  for the whole session. Reset on every getE2B() call; fires free() + null after
 	 *  E2B_IDLE_UNLOAD_MS of no further use. getE2B()'s existing lazy-create handles the reload. */
 	private e2bIdleTimer: ReturnType<typeof setTimeout> | null = null;
+	/** 2026-07 KV audit: >0 while runTurn() is executing (counter — the reactive-compaction
+	 *  retry re-enters runTurn recursively). The idle-unload timer MUST NOT free the E2B
+	 *  mid-turn: turns await async decodes, so the timer callback interleaves with them, and
+	 *  llama_free on a context whose AsyncWorker is still running on libuv's threadpool is a
+	 *  native use-after-free (Model::Free has no in-flight guard). Even between drafter ops it
+	 *  would kill the drafter mid-turn for nothing. */
+	private turnActive = 0;
 	/** Which brain generated the CURRENT conversation's turns — set when a fresh loop is built. */
 	private currentBrain: Brain = "large";
 	/** M13.4: buffers the small brain's FIRST step stream until the escalation decision — an
@@ -337,6 +350,8 @@ export class LocalConversationEngine {
 	private prefixSig: string[] = [];
 	/** M16.3: guards the one-shot compaction retry in the overflow catch (no recursion loops). */
 	private compactRetrying = false;
+	/** 2026-07 audit: a resetConversation() that arrived mid-turn, applied in runTurn's finally. */
+	private pendingReset = false;
 	private activeFilePath = "";
 	private filePrewarmCache = new FilePrewarmCache();
 	// M13.1: file content already fed into THIS conversation's KV (absPath → content).
@@ -460,6 +475,24 @@ export class LocalConversationEngine {
 		this.e2bIdleTimer = setTimeout(() => {
 			this.e2bIdleTimer = null;
 			if (!this.e2b) return;
+			// 2026-07 KV audit — three guards this callback was missing:
+			//   1. Mid-turn: never free while runTurn() is live (see turnActive) — the timer
+			//      interleaves with the turn's awaits, and freeing a context with an AsyncWorker
+			//      in flight is a native use-after-free. This WAS reachable: the deadline only
+			//      refreshes on getE2B(), which incremental turns never call, so any turn (or
+			//      incremental stretch) longer than the idle window armed it.
+			//   2. Small-brain conversations: the E2B *is* the live loop's generator there —
+			//      freeing it fails every subsequent turn of the session ("Model has been
+			//      freed"). Reschedule; the countdown restarts and unloads once the
+			//      conversation moves on.
+			//   3. Drafter reference: detach it from the loop BEFORE freeing, so the loop
+			//      degrades to trie/plain cleanly; the next turn re-attaches via
+			//      attachDraftModel() (see runTurn) instead of losing drafting for the session.
+			if (this.turnActive > 0 || (this.currentBrain === "small" && this.loop !== null)) {
+				this.scheduleE2BIdleUnload();
+				return;
+			}
+			this.loop?.detachDraftModel();
 			try {
 				this.e2b.free();
 			} catch { /* best-effort */ }
@@ -501,8 +534,19 @@ export class LocalConversationEngine {
 		return this.getE2B();
 	}
 
-	/** Drop the conversation so the next turn re-prefills from scratch (e.g. after an abort). */
+	/** Drop the conversation so the next turn re-prefills from scratch (e.g. after an abort).
+	 *
+	 * 2026-07 audit: DEFER if a turn is running. The worker's message handler is `async`, so a
+	 * `reset` message can be dispatched at any await point of an in-flight runTurn — clearing
+	 * loop/fedFiles/paths mid-turn would corrupt that turn's own state. Today the only caller
+	 * (provider.ts) posts reset AFTER awaiting the turn, so this can't happen — but that's the
+	 * client's discipline, not an invariant this engine can rely on. When turnActive, stash the
+	 * request; runTurn's finally applies it once the turn is fully done. */
 	resetConversation(): void {
+		if (this.turnActive > 0) {
+			this.pendingReset = true;
+			return;
+		}
 		this.loop = null;
 		this.prefixSig = [];
 		this.fedFiles.clear();
@@ -597,7 +641,11 @@ export class LocalConversationEngine {
 	 */
 	private estimateIncomingTokens(messages: readonly Message[], cwd: string): number {
 		const newMessages = messages.slice(this.prefixSig.length);
-		const model = this.getModel();
+		// 2026-07 audit: tokenize with a model that's ALREADY resident. The Gemma vocab is shared
+		// across the 12B and the E2B, so the count is identical either way — but calling
+		// getModel() in a small-brain conversation (where only the E2B is loaded, on purpose, to
+		// keep RAM down) would force-load the 12B just to measure. Prefer the live small model.
+		const model = (this.currentBrain === "small" && this.e2b) ? this.e2b : this.getModel();
 		let tokens = 0;
 		for (const m of newMessages) {
 			if (m.role === "user") {
@@ -915,6 +963,7 @@ export class LocalConversationEngine {
 
 	async runTurn(req: TurnRequest, hooks: TurnHooks = {}): Promise<TurnResult> {
 		this.hooks = hooks;
+		this.turnActive++; // keep the E2B idle-unload timer out of live turns (see its guards)
 		try {
 			let messages = req.messages;
 
@@ -937,7 +986,12 @@ export class LocalConversationEngine {
 				extendsPrefix(messages, this.prefixSig)
 			) {
 				const threshold = Number(process.env.SUBVOCAL_COMPACT_AT || "0.8");
-				const budget = this.resolveContextSize() * threshold;
+				// 2026-07 KV audit: size the budget on the window of the model actually holding
+				// this loop's KV. A small-brain loop lives on the E2B (32k in dual-brain), but
+				// this check used resolveContextSize() — the 12B's window (8k in dual-brain) —
+				// compacting E2B conversations ~4x too early.
+				const window = this.currentBrain === "small" ? this.resolveE2BContextSize() : this.resolveContextSize();
+				const budget = window * threshold;
 				const incoming = this.estimateIncomingTokens(messages, req.cwd);
 				if (this.loop.currentNPast + incoming > budget) {
 					messages = this.compactMessages(messages, req.cwd);
@@ -1031,7 +1085,9 @@ export class LocalConversationEngine {
 							cpuOff: true, // M11.3: intent source is precomputedIntent below when enabled, regex
 							// otherwise — the rest of cpuOff's tensor machinery (payload, logit mask) stays off.
 							precomputedIntent: await this.resolveIntent(replayPrompt),
-							kvCacheManager: new KVCacheManager(new LineCRCCache(), (text: string) => this.getModel().tokenize(text, false, false)),
+							// (2026-07 KV audit: a per-turn `new KVCacheManager(...)` was passed here for a
+							// while — inert by construction, a fresh instance has no baseline to diff against.
+							// See kvCacheManager.ts for what wiring it for real would require.)
 							filePrewarmCache: this.filePrewarmCache,
 						},
 						replayTurns,
@@ -1039,6 +1095,17 @@ export class LocalConversationEngine {
 					this.prefixSig = messages.slice(0, lastAssistantIdx + 1).map(messageSig);
 					incremental = true; // the tail below dispatches on the rebuilt KV
 				}
+			}
+
+			// 2026-07 KV audit: if the idle-unload detached the drafter between turns, re-attach
+			// a fresh E2B now — its shadow KV is rebuilt from the loop's transcript (a few
+			// seconds of E2B prefill vs losing the ~2x draft speedup for the whole rest of the
+			// session). Large-brain only: a small-brain loop's generator IS the E2B — it never
+			// has a drafter, and the unload guard above keeps it alive while its conversation
+			// lives. getDraftModel() already honors SUBVOCAL_LOCAL_DRAFT=0 by returning null.
+			if (incremental && this.currentBrain === "large" && !loop.hasDraftModel) {
+				const dm = this.getDraftModel();
+				if (dm) await loop.attachDraftModel(dm);
 			}
 
 			const newMessages = messages.slice(this.prefixSig.length);
@@ -1090,7 +1157,7 @@ export class LocalConversationEngine {
 					cpuOff: true, // M11.3: intent source is precomputedIntent below when enabled, regex
 					// otherwise — the rest of cpuOff's tensor machinery (payload, logit mask) stays off.
 					precomputedIntent: await this.resolveIntent(prompt),
-					kvCacheManager: new KVCacheManager(new LineCRCCache(), (text: string) => this.getModel().tokenize(text, false, false)),
+					// (2026-07 KV audit: per-turn KVCacheManager removed — see the replay-path note.)
 					filePrewarmCache: this.filePrewarmCache,
 				};
 				// M13.4: buffer the small brain's first-step stream — if it escalates, the unusable
@@ -1230,8 +1297,15 @@ export class LocalConversationEngine {
 				inputTokens: 0,
 			};
 		} finally {
+			this.turnActive--;
 			this.hooks = {};
 			this.smallTokenBuffer = null;
+			// 2026-07 audit: apply a reset that arrived mid-turn, now that the turn is fully done
+			// and turnActive is back to 0 (guard against a nested/reactive-retry frame still live).
+			if (this.pendingReset && this.turnActive === 0) {
+				this.pendingReset = false;
+				this.resetConversation();
+			}
 		}
 	}
 }

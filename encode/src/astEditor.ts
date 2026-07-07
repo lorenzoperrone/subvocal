@@ -277,35 +277,48 @@ const EXPORT_WRAPPER_TYPES = new Set(['export_statement', 'export_default_declar
 function findNode(root: TreeNode, injection: TagInjection): TreeNode | null {
 	const [nodeType, nodeName] = parseLabel(injection.label);
 
-	// Strategy A: exact position match via startIndex (most precise).
-	// The injection.startIndex is the byte offset of the node in the original source.
-	// If tree-sitter parses the same source, the node at that position IS the target.
-	const byPosition = findNodeAtPosition(root, injection.startIndex, nodeType);
-	if (byPosition) return byPosition;
+	// Priority is EXACT-position → EXACT-name → nearest-position (2026-07 audit). The old code
+	// returned findNodeAtPosition()'s result unconditionally, and that helper returned the
+	// CLOSEST node of the type with NO distance bound — so a stale injection.startIndex (an
+	// earlier in-turn edit shifted every later offset, or astTagger and this parse disagree by a
+	// byte) silently resolved to whatever same-type node happened to sit nearest, and the exact
+	// name match below was never even tried. Result: an edit applied to the wrong function, no
+	// error. Now the exact-position match only wins when it's actually exact; otherwise the name
+	// match (unambiguous when the model named its target) is preferred over a fuzzy position guess.
+	const exact = findNodeAtPosition(root, injection.startIndex, nodeType, /* exactOnly */ true);
+	if (exact) return exact;
 
-	// Strategy B (fallback): type + name match.
+	// Strategy B: type + name match — reliable even when byte offsets have drifted.
 	if (nodeName) {
 		const byName = findNodeByName(root, nodeType, nodeName);
 		if (byName) return byName;
 	}
 
-	return null;
+	// Strategy C (last resort): the nearest same-type node by position. Only reached when there
+	// is no exact-position hit AND no name (or no name match) — a genuine best-effort guess.
+	return findNodeAtPosition(root, injection.startIndex, nodeType, /* exactOnly */ false);
 }
 
 /**
- * Walk the AST and find the smallest node of the given type whose startIndex
- * matches `targetOffset` exactly (within 1-byte tolerance for BOM/whitespace).
+ * Walk the AST for a node of `nodeType` at `targetOffset`.
+ *   exactOnly=true  → return only a node whose startIndex matches within 1 byte (BOM/whitespace
+ *                     tolerance), else null.
+ *   exactOnly=false → return the nearest same-type node by startIndex (best-effort last resort).
  */
-function findNodeAtPosition(root: TreeNode, targetOffset: number, nodeType: string): TreeNode | null {
+function findNodeAtPosition(
+	root: TreeNode,
+	targetOffset: number,
+	nodeType: string,
+	exactOnly: boolean,
+): TreeNode | null {
 	let best: TreeNode | null = null;
 	const stack: TreeNode[] = [root];
 	while (stack.length > 0) {
 		const node = stack.pop()!;
 		if (node.type === nodeType) {
 			if (node.startIndex === targetOffset || Math.abs(node.startIndex - targetOffset) <= 1) {
-				return node; // exact match
+				return node; // exact match (within tolerance)
 			}
-			// Keep the closest match as fallback.
 			if (!best || Math.abs(node.startIndex - targetOffset) < Math.abs(best.startIndex - targetOffset)) {
 				best = node;
 			}
@@ -314,7 +327,7 @@ function findNodeAtPosition(root: TreeNode, targetOffset: number, nodeType: stri
 			stack.push(node.child(i));
 		}
 	}
-	return best;
+	return exactOnly ? null : best;
 }
 
 function findNodeByName(root: TreeNode, nodeType: string, name: string): TreeNode | null {

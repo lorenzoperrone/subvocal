@@ -156,7 +156,13 @@ function ruleMatches(command: string, rule: SandboxRule): boolean {
 export function checkCommand(command: string, rules: SandboxRule[]): SandboxResult {
 	const trimmed = command.trim();
 
-	if (/[&|;<>$()\\]/.test(trimmed)) {
+	// 2026-07 audit: added backticks and newlines/carriage returns to the forbidden set.
+	// Backticks are command substitution (`` grep `curl evil` `` passes the `grep` prefix rule
+	// and the shell still runs the sub-command); a newline is a statement separator, and model-
+	// produced JSON tool arguments carry literal \n trivially (`ls\nrm -rf .`). The command comes
+	// from the model — exactly the input this sandbox exists to contain. Note: matching is still
+	// on the RAW string BEFORE any allow rule, so nothing gets whitelisted around these.
+	if (/[&|;<>$()\\`\n\r]/.test(trimmed)) {
 		return {
 			allowed: false,
 			matchedRule: null,

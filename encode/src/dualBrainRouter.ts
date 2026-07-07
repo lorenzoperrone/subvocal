@@ -97,7 +97,13 @@ export function shouldEscalate(step: AgentStep, fileContent: string): string | n
   }
   for (const call of step.toolCalls) {
     if (call.name === 'edit') {
-      const oldText = (call.arguments.old as string | undefined) ?? '';
+      // 2026-07 audit: accept BOTH edit-tool arg shapes. The REPL's built-in tool uses
+      // `old`/`new` (AGENT_TOOLS); the TUI declares pi's flat form `oldText`/`newText`
+      // (wire.ts FLAT_EDIT_TOOL). This check only ever read `old`, so in the TUI (where the
+      // model emits `oldText`) it was always undefined — the "targets missing text" escalation
+      // never fired there, and a small-brain edit hallucinating a nonexistent target silently
+      // reached the executor instead of triggering a 12B redo.
+      const oldText = ((call.arguments.old ?? call.arguments.oldText) as string | undefined) ?? '';
       if (
         oldText &&
         !fileContent.includes(oldText) &&

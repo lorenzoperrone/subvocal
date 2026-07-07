@@ -679,6 +679,7 @@ export async function runTask(session: UtterSession, task: UtterTask, opts?: { k
 			if (compile.ok) {
 				vfs.write(task.filePath, editResult.newSource);
 				vfs.commit();
+				snapshotter.commit(); // 2026-07 audit: was missing — left a dangling snapshot entry
 				log.push({ turn: turns, type: 'commit', message: `ideogram edit → ${ideogram.nodeLabel}`, ms: performance.now() - t0 });
 				step = await loop.continue(
 					`Edit applied to ${ideogram.nodeLabel} via ideogram steering. Continue or stop.`,

@@ -27,8 +27,8 @@
 
 import { createHash } from 'node:crypto';
 import {
-  closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync,
-  unlinkSync, write as fsWrite, writeSync,
+  closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync,
+  statSync, unlinkSync, write as fsWrite, writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { zstdCompress, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
@@ -69,6 +69,8 @@ const COMPRESSION_ZSTD = 1;
  *  M3.6-cold-checkpoint-compression.md. */
 const COMPRESSION_ZSTD_SHUFFLE = 2;
 const SHA_NAME_RE = /^[0-9a-f]{40}$/;
+/** Suffix for in-progress checkpoint writes (see the write-then-rename note on writeSnapshot). */
+const TMP_SUFFIX = '.tmp';
 
 /**
  * 2-byte "shuffle" (byte-plane split): treats `buf` as a stream of u16 elements and gathers
@@ -178,6 +180,21 @@ export class KVColdStore {
     private readonly budgetBytes: number,
   ) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    // 2026-07 KV audit: sweep stale *.tmp leftovers from writes interrupted by a process
+    // exit/crash. Writes go tmp-then-rename (see writeSnapshot), so an interrupted write can
+    // only ever leave a .tmp — never a truncated checkpoint at its final SHA path (a truncated
+    // v1/raw payload would make llama_state_set_data read garbage; a truncated v2 payload used
+    // to make tryLoad() THROW on zstd decompress, failing every later start() that matched it).
+    for (const name of readdirSync(this.dir)) {
+      if (!name.endsWith(TMP_SUFFIX)) continue;
+      try { unlinkSync(join(this.dir, name)); } catch { /* best-effort sweep */ }
+    }
+  }
+
+  /** On-disk budget in bytes (0 or negative = unbounded). Read-only view for callers that
+   *  size their own write policy against it (see AgentLoop's ladder-vs-budget guard). */
+  get budget(): number {
+    return this.budgetBytes;
   }
 
   private pathForSha(sha: string): string {
@@ -236,9 +253,17 @@ export class KVColdStore {
     snap.totalSize = header.length + textBuf.length + compressed.length;
 
     this.evictIfNeeded(snap.totalSize);
+    // 2026-07 KV audit: write to a .tmp sibling, rename into place only when complete. These
+    // are multi-hundred-MB background writes that routinely outlive their turn (and the TUI
+    // process makes no teardown flush) — writing straight to the final SHA path meant a kill
+    // mid-write left a truncated checkpoint that the next session's tryLoad() would match by
+    // its (intact) header+text and then blow up decompressing. rename(2) is atomic on the same
+    // filesystem: readers only ever see a complete checkpoint or none. A leftover .tmp from a
+    // crash is swept by the constructor and skipped by listEntries' SHA-name filter.
     const path = this.pathForSha(snap.sha);
+    const tmpPath = path + TMP_SUFFIX;
     const MAX_SINGLE = (1 << 31) - 1; // fs.write rejects a single call larger than this
-    const fd = openSync(path, 'w');
+    const fd = openSync(tmpPath, 'w');
     try {
       let position = 0;
       for (const buf of snap.buffers) {
@@ -254,9 +279,13 @@ export class KVColdStore {
           }
         }
       }
-    } finally {
+    } catch (err) {
       closeSync(fd);
+      try { unlinkSync(tmpPath); } catch { /* best-effort */ }
+      throw err;
     }
+    closeSync(fd);
+    renameSync(tmpPath, path);
   }
 
   /** Promisified single fs.write (runs the syscall on libuv's threadpool). */
@@ -286,7 +315,11 @@ export class KVColdStore {
     const compressed = zstdCompressSync(shuffle2(kvBuf));
     header.writeUInt8(COMPRESSION_ZSTD_SHUFFLE, OFF_COMPRESSION);
     this.evictIfNeeded(header.length + textBuf.length + compressed.length);
-    KVColdStore.writeChunked(this.pathForSha(snap.sha), [header, textBuf, compressed]);
+    // Same tmp-then-rename discipline as writeSnapshot() — atomicity is a property of the
+    // store's on-disk format, not of one write path.
+    const path = this.pathForSha(snap.sha);
+    KVColdStore.writeChunked(path + TMP_SUFFIX, [header, textBuf, compressed]);
+    renameSync(path + TMP_SUFFIX, path);
   }
 
   /**
@@ -342,24 +375,42 @@ export class KVColdStore {
     }
     if (!bestSha) return { matchedChars: 0, matchedTokens: 0 };
 
-    const buf = readFileSync(this.pathForSha(bestSha));
-    const textBytes = buf.readUInt32LE(32);
-    const matchedTokens = buf.readUInt32LE(8);
-    let kvBuf: Buffer = buf.subarray(HEADER_FIXED + textBytes);
-    // v2 files may carry a compressed payload; v1 files are always raw. Two v2 encodings
-    // coexist on disk: legacy plain zstd (M3.6, no longer written) and shuffle2+zstd (the
-    // follow-up, written since 2026-07-06) — both stay readable indefinitely, no migration.
-    if (buf.readUInt8(4) >= 2) {
-      const compression = buf.readUInt8(OFF_COMPRESSION);
-      if (compression === COMPRESSION_ZSTD) {
-        kvBuf = zstdDecompressSync(kvBuf);
-      } else if (compression === COMPRESSION_ZSTD_SHUFFLE) {
-        kvBuf = unshuffle2(zstdDecompressSync(kvBuf));
+    // 2026-07 KV audit: the whole load is guarded. Before this, a corrupt/truncated checkpoint
+    // (legacy pre-atomic-write leftovers, bitrot, disk-full) made tryLoad THROW — and since the
+    // same prompt prefix re-matches the same file every session, ONE bad file failed every
+    // subsequent start() until someone deleted it by hand. A checkpoint is a cache entry:
+    // unreadable ⇒ unlink it and report no-match (the caller falls back to a full prefill,
+    // which clears whatever a partial kvRestore may have left in the KV — see prefillOrResume).
+    try {
+      const buf = readFileSync(this.pathForSha(bestSha));
+      const textBytes = buf.readUInt32LE(32);
+      const matchedTokens = buf.readUInt32LE(8);
+      let kvBuf: Buffer = buf.subarray(HEADER_FIXED + textBytes);
+      // v2 files may carry a compressed payload; v1 files are always raw. Two v2 encodings
+      // coexist on disk: legacy plain zstd (M3.6, no longer written) and shuffle2+zstd (the
+      // follow-up, written since 2026-07-06) — both stay readable indefinitely, no migration.
+      if (buf.readUInt8(4) >= 2) {
+        const compression = buf.readUInt8(OFF_COMPRESSION);
+        if (compression === COMPRESSION_ZSTD) {
+          kvBuf = zstdDecompressSync(kvBuf);
+        } else if (compression === COMPRESSION_ZSTD_SHUFFLE) {
+          kvBuf = unshuffle2(zstdDecompressSync(kvBuf));
+        }
       }
+      // Node's zstdDecompressSync does NOT throw on a truncated frame — it returns an EMPTY
+      // buffer (verified 2026-07-07). A real KV state is never empty, so treat that as the
+      // corruption it is rather than handing llama_state_set_data a zero-byte blob.
+      if (kvBuf.length === 0) throw new Error('empty/truncated KV payload');
+      model.kvRestore(new Uint8Array(kvBuf.buffer, kvBuf.byteOffset, kvBuf.byteLength));
+      this.touch(bestSha, buf);
+      return { matchedChars: bestText.length, matchedTokens };
+    } catch (err) {
+      console.warn(
+        `[coldStore] dropping unreadable checkpoint ${bestSha}: ${(err as Error).message}`,
+      );
+      try { unlinkSync(this.pathForSha(bestSha)); } catch { /* already gone — fine */ }
+      return { matchedChars: 0, matchedTokens: 0 };
     }
-    model.kvRestore(new Uint8Array(kvBuf.buffer, kvBuf.byteOffset, kvBuf.byteLength));
-    this.touch(bestSha, buf);
-    return { matchedChars: bestText.length, matchedTokens };
   }
 
   /**

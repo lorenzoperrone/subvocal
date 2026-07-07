@@ -36,6 +36,11 @@ export function sanitizeStreamText(raw: string): string {
 	out = out.replace(new RegExp(`${escape(TOOL_OPEN)}[\\s\\S]*?${escape(TOOL_CLOSE)}`, "g"), "");
 	out = out.replace(new RegExp(`${escape(TOOL_OPEN)}[\\s\\S]*$`), "");
 	out = out.replace(new RegExp(`${escape(CHANNEL_OPEN)}[\\s\\S]*?${escape(CHANNEL_CLOSE)}`, "g"), "");
+	// 2026-07 audit: mirror the TOOL_OPEN unclosed-trailing rule for the channel too. Without
+	// this, while the model is still emitting a (hallucinated) thought channel — CHANNEL_OPEN
+	// seen, CHANNEL_CLOSE not yet — the reasoning text streamed to the user until the closer
+	// arrived. Dropping from an unclosed opener to end-of-string suppresses it live.
+	out = out.replace(new RegExp(`${escape(CHANNEL_OPEN)}[\\s\\S]*$`), "");
 	if (IDEOGRAM_ENABLED) {
 		out = out.replace(new RegExp(`${escape(IDEO_OPEN)}[\\s\\S]*?${escape(IDEO_CLOSE)}`, "g"), "");
 		out = out.replace(new RegExp(`${IDEO_OPEN}[\\s\\S]*$`), ""); // unclosed ideogram still streaming

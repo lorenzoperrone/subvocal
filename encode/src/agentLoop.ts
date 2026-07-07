@@ -285,6 +285,8 @@ export class AgentLoop {
 	private coldStore: KVColdStore | null = null;
 	/** In-flight background cold-store checkpoint writes (see prefillOrResume + flushColdWrites). */
 	private pendingColdWrites: Promise<void>[] = [];
+	/** Tail of the serialized checkpoint-write chain — see queueColdWrite's RAM-bounding note. */
+	private coldWriteChain: Promise<void> = Promise.resolve();
 	/** M3.7: exact rendered text mirror of the KV cache content (prompt + generated + turn
 	 *  scaffolding), used to key mid-session checkpoints. Best-effort: a BPE roundtrip mismatch
 	 *  at restore time is caught by prefillOrResume's sanity check, never trusted silently. */
@@ -517,24 +519,38 @@ export class AgentLoop {
 	 */
 	private async prefillOrResume(prompt: string, promptTokens: Int32Array): Promise<void> {
 		if (!this.coldStore) {
-			await this.model.forwardAsync(promptTokens);
+			const status = await this.model.forwardAsync(promptTokens);
+			if (status !== 0) throw new Error(`prefill forward failed (llama_decode status ${status})`);
 			return;
 		}
 
 		const { matchedChars, matchedTokens } = this.coldStore.tryLoad(this.model, prompt);
 		if (matchedTokens > 0) {
-			// Sanity check: the checkpoint's recorded token count must actually match how the
-			// matched text re-tokenizes on its own. A real mismatch here would mean restoring
-			// produced a KV state that doesn't correspond to this prompt's real tokenization —
-			// don't trust it silently. (forward() below does llama_memory_clear() first, so
-			// falling through after a bad restore still produces a correct, just non-resumed,
-			// prefill — no risk of generating from corrupted KV state.)
+			// Sanity check: the matched text must re-tokenize to EXACTLY the full prompt's own
+			// first `matchedTokens` token IDs, element-wise — not just to the same COUNT. The
+			// count-only check this replaces (2026-07 KV audit) had a silent-corruption hole: a
+			// BPE merge across the checkpoint boundary (classic case: a rung ends at "\n" and
+			// the new prompt continues with indentation, which the full prompt tokenizes as one
+			// fused "\n    " token) can keep the prefix count identical while the token at the
+			// seam differs — splicing decodeAppend(promptTokens.slice(matchedTokens)) on top
+			// would then silently drop/garble the seam characters in the KV. Same discipline as
+			// coldLadderBoundaries' write-side verification, which was already element-wise.
+			// (forward() below does llama_memory_clear() first, so falling through after a bad
+			// restore still produces a correct, just non-resumed, prefill.)
 			const matchedText = prompt.slice(0, matchedChars);
 			const sanityTokens = this.model.tokenize(matchedText, true, true);
-			if (sanityTokens.length === matchedTokens) {
+			let resumable = sanityTokens.length === matchedTokens;
+			for (let i = 0; resumable && i < matchedTokens; i++) {
+				if (sanityTokens[i] !== promptTokens[i]) resumable = false;
+			}
+			if (resumable) {
 				const remainder = promptTokens.slice(matchedTokens);
 				if (remainder.length > 0) {
-					await this.model.decodeAppendAsync(remainder);
+					// A non-zero status means the KV holds the restored prefix but NOT the
+					// remainder — advancing would desync every later position. Fall through to
+					// the full prefill instead (forward() clears the partial state first).
+					const status = await this.model.decodeAppendAsync(remainder);
+					if (status === 0) return; // resumed — KV now represents the full prompt
 				} else {
 					// Exact full-prompt match (e.g. an identical retry) — kvRestore() brings
 					// back the KV cache's history but NOT the last computed logits (those are
@@ -546,9 +562,9 @@ export class AgentLoop {
 					// token), and correct (same KV slot is reused, not appended at a new one).
 					this.model.kvCacheSeqRemove(0, promptTokens.length - 1, -1);
 					this.model.resetNPast(promptTokens.length - 1);
-					await this.model.decodeAppendAsync(promptTokens.slice(-1));
+					const status = await this.model.decodeAppendAsync(promptTokens.slice(-1));
+					if (status === 0) return; // resumed
 				}
-				return; // resumed — KV now represents the full prompt without a full forward()
 			}
 		}
 
@@ -561,18 +577,44 @@ export class AgentLoop {
 		// prompts: the next REPL turn's prompt shares the static prefix (system prompt + file
 		// context) but diverges at the user prompt, so the full-prompt checkpoint below never
 		// matches it — a rung inside the shared region does.
+		//
+		// 2026-07 KV audit: every decode status is checked (a silently-failed chunk used to
+		// leave nPast/transcript advanced past a hole AND let the rung below checkpoint a KV
+		// that doesn't match its text — a corruption the restore-side sanity check can never
+		// catch, since text and token count would both look right). And the ladder is
+		// budget-aware: kvSave() serializes the WHOLE context state, so on the 12B every rung
+		// carries the ~480 MiB fixed compact-SWA cache no matter how few tokens it covers — a
+		// 3-rung ladder plus the full checkpoint was ~2.4+ GiB against MacProfile's 4 GiB
+		// budget, thrashing the store's eviction on every long start(). The first rung's
+		// actual snapshot size decides: if the full ladder wouldn't fit in half the budget,
+		// skip the intermediate rungs (the full-prompt checkpoint — the highest-value one,
+		// exact replay resume — is always written).
 		const rungs = this.coldLadderBoundaries(prompt, promptTokens);
 		let done = 0;
+		let rungsSkipped = false;
 		for (const rung of rungs) {
 			const chunk = promptTokens.subarray(done, rung.tokenCount);
-			if (done === 0) await this.model.forwardAsync(chunk);
-			else await this.model.decodeAppendAsync(chunk);
+			const status = done === 0
+				? await this.model.forwardAsync(chunk)
+				: await this.model.decodeAppendAsync(chunk);
+			if (status !== 0) throw new Error(`prefill failed at token ${done} (llama_decode status ${status})`);
 			done = rung.tokenCount;
-			this.queueColdWrite(this.coldStore.snapshot(this.model, rung.text, rung.tokenCount, 'cold'));
+			if (rungsSkipped) continue;
+			const snap = this.coldStore.snapshot(this.model, rung.text, rung.tokenCount, 'cold');
+			const budget = this.coldStore.budget;
+			if (budget > 0 && snap.totalSize * (rungs.length + 1) > budget / 2) {
+				rungsSkipped = true; // fixed-cost-dominated checkpoints — rungs would thrash the store
+			} else {
+				this.queueColdWrite(snap);
+			}
 		}
 		const rest = promptTokens.subarray(done);
-		if (done === 0) await this.model.forwardAsync(rest);
-		else if (rest.length > 0) await this.model.decodeAppendAsync(rest);
+		if (done === 0 || rest.length > 0) {
+			const status = done === 0
+				? await this.model.forwardAsync(rest)
+				: await this.model.decodeAppendAsync(rest);
+			if (status !== 0) throw new Error(`prefill failed at token ${done} (llama_decode status ${status})`);
+		}
 		// Snapshot the full-prompt KV *now* (synchronous copy, before decode mutates it), then
 		// flush it to SSD in the background so the multi-hundred-MB disk write overlaps the
 		// response decode instead of blocking before it. Safe: the snapshot is a JS-owned copy,
@@ -582,13 +624,22 @@ export class AgentLoop {
 		this.queueColdWrite(this.coldStore.snapshot(this.model, prompt, promptTokens.length, 'cold'));
 	}
 
-	/** Fire-and-forget a checkpoint write, tracked for flushColdWrites(). */
+	/**
+	 * Fire-and-forget a checkpoint write, tracked for flushColdWrites(). Writes are CHAINED
+	 * (one in flight at a time, 2026-07 KV audit): each writeSnapshot holds a shuffle copy +
+	 * a zstd output alongside the raw snapshot while it runs, so letting a long start()'s
+	 * ladder run 4 of those concurrently spiked multiple extra GiB of transient RAM on a
+	 * 16 GB machine already holding the 12B. Serializing bounds the overhead to one write's
+	 * working set; the snapshots themselves are already-taken copies, so ordering doesn't
+	 * affect correctness — only when each hits the SSD.
+	 */
 	private queueColdWrite(snap: ReturnType<KVColdStore['snapshot']>): void {
-		this.pendingColdWrites.push(
+		this.coldWriteChain = this.coldWriteChain.then(() =>
 			this.coldStore!.writeSnapshot(snap).catch(err => {
 				console.warn(`[coldStore] background checkpoint write failed: ${(err as Error).message}`);
 			}),
 		);
+		this.pendingColdWrites.push(this.coldWriteChain);
 	}
 
 	/**
@@ -675,7 +726,12 @@ export class AgentLoop {
 		const obsText = this.profile.buildToolResponse(observation, toolName ?? this.lastToolCallName);
 		const obsTokens = this.model.tokenize(obsText, false, true);
 
-		await this.model.decodeAppendAsync(obsTokens);
+		// 2026-07 KV audit: a non-zero llama_decode status used to be silently ignored here,
+		// advancing nPast/transcript past tokens that never reached the KV — a desync that
+		// corrupts every later turn AND every later checkpoint. Throw instead (context
+		// overflow already throws from the binding; this covers the residual failure modes).
+		const status = await this.model.decodeAppendAsync(obsTokens);
+		if (status !== 0) throw new Error(`continue() decode failed (llama_decode status ${status})`);
 		this.nPast += obsTokens.length;
 		this.transcript += obsText;
 		this.feedSuffixTree(obsTokens);
@@ -702,7 +758,9 @@ export class AgentLoop {
 		const followUpText = this.profile.buildFollowUp(userPrompt);
 		const followUpTokens = this.model.tokenize(followUpText, false, true);
 
-		await this.model.decodeAppendAsync(followUpTokens);
+		// Same status discipline as continue() — see the comment there (2026-07 KV audit).
+		const status = await this.model.decodeAppendAsync(followUpTokens);
+		if (status !== 0) throw new Error(`followUp() decode failed (llama_decode status ${status})`);
 		this.nPast += followUpTokens.length;
 		this.transcript += followUpText;
 		this.feedSuffixTree(followUpTokens);
@@ -961,7 +1019,17 @@ export class AgentLoop {
 
 		const edits = this.steering?.edits ?? [];
 		const rawText = generated.length > 0 ? this.model.detokenize(Int32Array.from(generated)) : '';
-		this.transcript += rawText; // M3.7: keep the transcript in sync with the KV content
+		// M3.7: keep the transcript in sync with the KV content — the COMMITTED content only
+		// (2026-07 KV audit). `generated` can end with an uncommitted tail (a steering stop
+		// token, or the last token of a maxTokens-exhausted turn) that is part of the OUTPUT
+		// text but never entered the KV; appending it here made tokenize(transcript) disagree
+		// with nPast from that turn on, so every later mid-session checkpoint failed the
+		// restore-side sanity check forever — hundreds of MiB written per session, none of it
+		// ever restorable.
+		const committed = generated.length - uncommittedTail;
+		this.transcript += committed > 0
+			? (committed === generated.length ? rawText : this.model.detokenize(Int32Array.from(generated.slice(0, committed))))
+			: '';
 		const parsed = parseAssistantOutput(rawText);
 		if (parsed.toolCalls.length > 0) {
 			// Track the most recent call's name so continue()'s buildToolResponse() default
@@ -977,6 +1045,42 @@ export class AgentLoop {
 			tokenCount: generated.length,
 			stoppedNaturally,
 		};
+	}
+
+	/** Whether a drafter is currently attached (its shadow KV may or may not be live — see
+	 *  draftReady). Lets a host that manages the drafter's lifecycle (the TUI's E2B
+	 *  idle-unload) know when to re-attach. */
+	get hasDraftModel(): boolean {
+		return this.draftModel !== null;
+	}
+
+	/**
+	 * 2026-07 KV audit: detach the drafter WITHOUT freeing it — for hosts that unload the
+	 * shared E2B to reclaim RAM (conversation.ts's idle-unload). Called BEFORE the host frees
+	 * the model, so this loop never touches a freed native context. Drafting turns off; the
+	 * loop keeps working via trie/plain decode.
+	 */
+	detachDraftModel(): void {
+		this.draftModel = null;
+		this.draftReady = false;
+		this.draftNPast = 0;
+	}
+
+	/**
+	 * 2026-07 KV audit: (re)attach a drafter mid-session and rebuild its shadow KV from the
+	 * running transcript. The transcript re-tokenization may differ from the originally
+	 * committed token IDs (BPE roundtrip — same acknowledged property as replay()); that can
+	 * only lower draft ACCEPTANCE, never correctness (mtpVerifyBatch verifies on the target).
+	 * Prefill failure (context too small, decode error) just leaves drafting off — same
+	 * contract as draftPrefill. No-op cost when called with drafting already live is zero
+	 * because callers gate on !hasDraftModel.
+	 */
+	async attachDraftModel(model: ModelGPU): Promise<void> {
+		this.draftModel = model;
+		this.draftK = this.draftInitK;
+		this.draftReady = false;
+		if (this.firstTurn || this.transcript.length === 0) return; // start()/replay() prefill it
+		await this.draftPrefill(this.model.tokenize(this.transcript, true, true));
 	}
 
 	/** M12.3: (re)prefill the drafter's shadow KV with the full context. Failure ⇒ drafting off. */
@@ -1085,21 +1189,36 @@ export class AgentLoop {
 				// vs 1.98x draft-only) — 8-token trie rounds with imperfect acceptance preempt
 				// 32-token 99.5%-accepted model rounds while still paying the per-round shadow
 				// sync. The trie is the fallback for rounds/sessions without a live drafter.
+				//
+				// 2026-07 KV audit: the drafter block has its OWN catch. It used to share the
+				// round's outer catch (below), which ends the whole turn — so a drafter-side
+				// throw (most concretely: the TUI's E2B idle-unload freeing the shadow model
+				// between this loop's awaits) at round 0 returned an EMPTY turn instead of the
+				// answer. A drafter is an accelerator: on any error, drop it for the session
+				// and keep decoding via trie/plain in this same round. The shadow KV may hold
+				// un-reconciled draft tokens after a mid-draft throw — irrelevant once
+				// draftReady is false (attachDraftModel/draftPrefill re-prefill from scratch).
 				if (this.draftModel && this.draftReady) {
-					const cap = Math.min(this.draftK, this.maxTokens - generated.length + 1);
-					const buf: number[] = [];
-					for (let i = 0; i < cap; i++) {
-						const id = this.draftModel.getLogitsTopK(1)[0];
-						if (stopTokenIds.has(id)) break;
-						if ((await this.draftModel.decodeAppendAsync(Int32Array.of(id))) !== 0) {
-							this.draftReady = false;
-							break;
+					try {
+						const cap = Math.min(this.draftK, this.maxTokens - generated.length + 1);
+						const buf: number[] = [];
+						for (let i = 0; i < cap; i++) {
+							const id = this.draftModel.getLogitsTopK(1)[0];
+							if (stopTokenIds.has(id)) break;
+							if ((await this.draftModel.decodeAppendAsync(Int32Array.of(id))) !== 0) {
+								this.draftReady = false;
+								break;
+							}
+							buf.push(id);
 						}
-						buf.push(id);
+						draftedOnDrafter = buf.length;
+						this.draftNPast += draftedOnDrafter;
+						draft = Int32Array.from(buf);
+					} catch {
+						this.draftReady = false;
+						draftedOnDrafter = 0;
+						draft = new Int32Array(0);
 					}
-					draftedOnDrafter = buf.length;
-					this.draftNPast += draftedOnDrafter;
-					draft = Int32Array.from(buf);
 				}
 
 				// Draft source 2 — suffix trie (free: pure lookup, no model cost).
@@ -1185,6 +1304,22 @@ export class AgentLoop {
 						break;
 					}
 					if (this.steering) {
+						// 2026-07 audit: poison-token defense for the batch path. The plain loop's
+						// sample() masks a poison token (turn/channel markers the observer treats
+						// as degeneration) and re-samples; a token that arrived pre-decoded from
+						// mtpVerifyBatch skipped that gate. We can't re-sample a committed token
+						// here without a fresh decode for valid logits, so the safe, provably-
+						// correct action is to truncate BEFORE the poison and stop the round: the
+						// clean prefix is kept, poison never reaches the KV (the commit<len rollback
+						// below evicts it), and checkPoison() also keeps the steering machine's
+						// running text in sync for multi-token patterns. Slightly more conservative
+						// than the plain path's mask-and-continue (it ends the turn instead of
+						// skipping the one token) — an acceptable trade on the fast path; full parity
+						// would need a re-decode from roundBase+i.
+						if (this.steering.checkPoison(tok)) {
+							keep = i; commit = i; stoppedThisRound = true;
+							break;
+						}
 						const sr = this.steering.feedToken(tok);
 						if (sr.stop) {
 							keep = i + 1; commit = i; stoppedThisRound = true;

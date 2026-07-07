@@ -8,6 +8,21 @@
  * information at setFile() time; if not available, invalidates the full file
  * rather than guessing token positions.
  *
+ * CAUSAL-ATTENTION CONTRACT (2026-07 KV audit): the returned range always runs
+ * from the FIRST changed token to the END of the file's token span, never a
+ * mid-file hole. Every token AFTER an edit has KV computed while attending to
+ * the pre-edit tokens, so "remove just the changed lines' tokens and re-prefill
+ * those" — what an earlier version of this file's usage example suggested — is
+ * unsound: the downstream tokens' KV would still encode the old content (and
+ * mid-sequence position holes on top). Invalidate-to-end is the cheapest sound
+ * granularity short of full-file.
+ *
+ * STATUS: not wired into any production path today. The TUI briefly constructed
+ * one per turn (inert — a fresh instance has no baseline to diff against;
+ * removed in the same audit). To wire it for real: persist ONE instance per
+ * session, call setFile() after each successful prefill of a file block, and on
+ * invalidation kvCacheSeqRemove + resetNPast + re-decode from `range.start`.
+ *
  * Usage:
  *   const crCache = new LineCRCCache();
  *   const mgr = new KVCacheManager(crCache, (text) => model.tokenize(text));
@@ -19,11 +34,11 @@
  *
  *   // On file change event:
  *   const result = await mgr.invalidateIfDirty(path, newContent);
- *   if (result?.dirty) {
- *     for (const r of result.tokenRanges) {
- *       model.kvCacheSeqRemove(0, r.start, r.end);
- *     }
- *     // re-prefill with new content, then call setFile again
+ *   if (result?.dirty && result.tokenRanges.length > 0) {
+ *     const r = result.tokenRanges[0]; // single range: first change → end of file span
+ *     model.kvCacheSeqRemove(0, fileBasePos + r.start, -1);
+ *     model.resetNPast(fileBasePos + r.start);
+ *     // re-decode from r.start with the new content, then call setFile again
  *   }
  */
 
@@ -49,9 +64,10 @@ export interface InvalidationResult {
 	dirty: boolean;
 	isStructureChanged: boolean;
 	/**
-	 * Token-position ranges to remove from the KV cache.
-	 * Empty when dirty===false.  May contain a single full-file range when
-	 * isStructureChanged===true (line insert/delete makes position mapping unreliable).
+	 * Token-position range(s) to remove from the KV cache. Empty when dirty===false;
+	 * otherwise a SINGLE range from the first changed token to the end of the file's
+	 * token span (causal attention makes anything downstream of an edit stale too —
+	 * see the header comment). Kept as an array for API stability.
 	 */
 	tokenRanges: TokenRange[];
 	changedLineCount: number;
@@ -202,28 +218,25 @@ export class KVCacheManager {
 			};
 		}
 
-		// Convert changed line ranges to token ranges using byte boundaries
+		// Find the FIRST changed token via the byte boundaries, then invalidate from there to
+		// the end of the file's token span. (2026-07 KV audit: this used to return the merged
+		// per-line ranges, inviting callers to punch mid-file holes in the KV — unsound under
+		// causal attention, see the header comment.)
 		const lineToToken = buildLineToTokenMap(entry.boundaries, entry.content, entry.tokenIds);
 
-		const tokenRanges = changedRanges
-			.flatMap((r): TokenRange[] => {
-				const ranges: TokenRange[] = [];
-				for (let line = r.start; line <= r.end; line++) {
-					const t = lineToToken.get(line);
-					if (t !== undefined) ranges.push(t);
+		let firstChangedToken = -1;
+		for (const r of changedRanges) {
+			for (let line = r.start; line <= r.end; line++) {
+				const t = lineToToken.get(line);
+				if (t !== undefined && (firstChangedToken < 0 || t.start < firstChangedToken)) {
+					firstChangedToken = t.start;
 				}
-				return ranges;
-			})
-			.sort((a, b) => a.start - b.start)
-			.reduce<TokenRange[]>((acc, r) => {
-				const last = acc[acc.length - 1];
-				if (last && r.start <= last.end + 1) {
-					last.end = Math.max(last.end, r.end);
-				} else {
-					acc.push({ ...r });
-				}
-				return acc;
-			}, []);
+			}
+		}
+		const tokenRanges: TokenRange[] =
+			firstChangedToken >= 0
+				? [{ start: firstChangedToken, end: entry.tokenIds.length - 1 }]
+				: [{ start: 0, end: entry.tokenIds.length - 1 }]; // no mappable line — full file
 
 		return { dirty: true, isStructureChanged, tokenRanges, changedLineCount };
 	}
