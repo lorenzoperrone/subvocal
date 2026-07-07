@@ -218,7 +218,7 @@ export interface AgentLoopConfig {
 	 * disk-persisted KV checkpoint instead of re-prefilling the whole prompt from scratch —
 	 * validated at ~13.7x standalone / ~10.9x wired into start() for a 2041-token context
 	 * (see doc/research/m1-metal-benchmark.md). Default: ON, using a default store under
-	 * `~/.cache/subvocal/kv-cold` (2 GiB budget) -- this is disk I/O, not GPU bandwidth, so
+	 * `~/.cache/subvocal/kv-cold` (4 GiB budget) -- this is disk I/O, not GPU bandwidth, so
 	 * even a one-shot session's worst case (a write that's never reused) doesn't compete
 	 * with the scarce resource we're optimizing. Pass a `KVColdStore` instance to use your
 	 * own path/budget, or `null` to disable entirely.

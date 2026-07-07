@@ -181,6 +181,13 @@ export interface ModelProfile {
    */
   readonly dualBrainMaxCtx?: number;
   /**
+   * The E2B's OWN context cap when it's resident alongside the large model (drafter or
+   * dual-brain generator role) — independent of dualBrainMaxCtx (2026-07-07 owner call: the
+   * pair no longer shares one window; the cheap/fast E2B gets a generous one, the expensive
+   * 12B gets a tight one). Undefined = the E2B falls back to its own smallOpts.contextSize.
+   */
+  readonly e2bMaxCtx?: number;
+  /**
    * largeOpts drives the default (warm tier) initialization.
    * contextSize is overridden by initLargeModel when a tier is specified explicitly.
    */
@@ -476,12 +483,14 @@ export const MacProfile: ModelProfile = {
     // warm KV, which means more contexts get evicted/re-prefilled — the checkpoint cache on
     // SSD is the tier that absorbs that (this IS the "KV on SSD" in this design: whole
     // checkpoints, Axis 2; live per-token paging stays ruled out by bandwidth physics,
-    // Axis 3 — see the epic). Raised 4 → 8 GiB accordingly; a realistic coding-session
-    // checkpoint is tens of MiB, so this holds hundreds of session states.
+    // Axis 3 — see the epic). A realistic coding-session checkpoint is tens of MiB, so 4 GiB
+    // still holds well over a hundred session states; eviction (hit-decayed score,
+    // kvColdStore.ts) absorbs the rest. 2026-07-07: unified back to the same 4 GiB as
+    // agentLoop.ts's generic default (was 8 GiB) — owner call, one number to reason about.
     cold: {
       location: 'ssd',
       diskPath: path.join(os.homedir(), '.cache', 'subvocal', 'kv-cold'),
-      budgetBytes: 8 * 1024 * 1024 * 1024, // 8 GiB
+      budgetBytes: 4 * 1024 * 1024 * 1024, // 4 GiB
     },
   },
 
@@ -493,12 +502,17 @@ export const MacProfile: ModelProfile = {
   // KV on top of the 12B's budget. MEASURED 2026-07-01 (live REPL, --cpu-model on, default
   // 128k ctx, M2 Pro 16 GB): both models fit but saturate the machine — 12.1 GiB wired
   // (Metal residency sets), 64 MB unused, compressor ~1.1 GiB, 2.2/3 GB swap in use with a
-  // normal desktop session (browser etc.) open. Hence dualBrainMaxCtx below: with the small
-  // model loaded, cap the 12B's live context to 16k (warm KV 2 GiB → 256 MiB) unless
-  // SUBVOCAL_CONTEXT_SIZE says otherwise. Single-model keeps the full MAC_CTX default.
+  // normal desktop session (browser etc.) open. Single-model keeps the full MAC_CTX default.
+  //
+  // 2026-07-07 (owner call): the pair no longer shares one window. The E2B is cheap
+  // (drafter/fast-path generator) and gets a generous 32k so it can hold a long effective
+  // conversation; the 12B is the expensive, rarely-invoked escalation path and gets a tight
+  // 8k — the KV savings from shrinking the 12B's window pay for the E2B's bigger one. Was
+  // a single shared dualBrainMaxCtx=16384; now asymmetric (dualBrainMaxCtx / e2bMaxCtx).
   smallBackend: 'gpu',
   smallOpts: { contextSize: 4096, threads: 4, gpuLayers: 999 },
-  dualBrainMaxCtx: 16384,
+  dualBrainMaxCtx: 8192,
+  e2bMaxCtx: 32768,
   largeOpts: { contextSize: MAC_CTX, threads: 4, gpuLayers: 999, noKvOffload: true },
 
   // Per the model card's "Sampling Parameters" section: temperature=1.0, top_p=0.95,

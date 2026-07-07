@@ -320,13 +320,21 @@ interface ProviderRegistrar {
 export function registerLocalProviderModels(registry: ProviderRegistrar): void {
 	// Mirrors the worker's LocalConversationEngine.resolveContextSize() (single source of
 	// truth over there — this file can't import @subvocal/encode: main thread, no native
-	// addons): 32k single-model, 16k when a second E2B instance is resident (drafter or
-	// dual-brain generator), SUBVOCAL_LOCAL_CTX overrides. Was hardcoded 8192, which made
-	// the statusbar % and the harness's auto-compaction budget disagree with the real window.
+	// addons) for the 12B's OWN window, which is what the statusbar %/auto-compaction budget
+	// should track — the E2B's separate, wider resolveE2BContextSize() doesn't apply here,
+	// it's not the model whose output the harness is compacting around. 32k single-model, 8k
+	// (dualBrainMaxCtx) when a second E2B instance is resident (drafter or dual-brain
+	// generator), SUBVOCAL_LOCAL_CTX overrides. Was hardcoded 8192 pre-fix (which happened to
+	// match again post-2026-07-07's asymmetric split, but for the wrong reason — it wasn't
+	// mirroring anything then).
+	//
+	// SUBVOCAL_LOCAL_DUAL_BRAIN check matches conversation.ts's DUAL_BRAIN_ENABLED exactly
+	// (=== "1", strict opt-in) — a previous !== "0" here disagreed with that on an unset var,
+	// which could show the wrong window in the statusbar.
 	const contextWindow = process.env.SUBVOCAL_LOCAL_CTX
 		? Number(process.env.SUBVOCAL_LOCAL_CTX)
-		: process.env.SUBVOCAL_LOCAL_DRAFT !== "0" || process.env.SUBVOCAL_LOCAL_DUAL_BRAIN !== "0"
-			? 16384
+		: process.env.SUBVOCAL_LOCAL_DRAFT !== "0" || process.env.SUBVOCAL_LOCAL_DUAL_BRAIN === "1"
+			? 8192
 			: 32768;
 	registry.registerProvider(SUBVOCAL_LOCAL_PROVIDER, {
 		api: SUBVOCAL_LOCAL_API,

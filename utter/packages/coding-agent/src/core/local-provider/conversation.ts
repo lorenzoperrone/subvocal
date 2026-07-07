@@ -358,26 +358,40 @@ export class LocalConversationEngine {
 	}
 
 	/**
-	 * Context size for the loaded models. With compact-SWA (patch 102, enabled by
+	 * Context size for the 12B. With compact-SWA (patch 102, enabled by
 	 * LLAMA_KV_SWA_OFFLOAD=1 in bin/subvocal) + noKvOffload, the KV is CHEAP and nearly
 	 * context-independent: SWA is fixed at 480 MiB (GPU), the global KV is ~96 MiB @ 6k /
 	 * ~512 MiB @ 32k and lives in RAM (off the Metal working set). So the OOM was the
 	 * full-size SWA (~5 GiB at 8k WITHOUT the split), not the context — once the split is on,
 	 * we can afford a real coding-agent window. The weights are the budget, not the KV:
-	 *   - single model:  32768 (KV ~512 MiB; the REPL runs 128k, we leave more headroom for
-	 *                    the heavier pi-harness process).
-	 *   - dual model (drafter on, OR M13.4 dual-brain generator on): 16384 — matches the REPL's
-	 *                    proven dualBrainMaxCtx; the E2B weights (~2.4 GiB) take the headroom the
-	 *                    larger single-model window would use. Both the 12B and whichever E2B
-	 *                    instance is resident share this (a shadow KV, or the generator's own,
-	 *                    must span the same conversation window budget).
+	 *   - single model: 32768 (KV ~512 MiB; the REPL runs 128k, we leave more headroom for
+	 *                   the heavier pi-harness process).
+	 *   - dual model (drafter on, OR M13.4 dual-brain generator on): 8192 (dualBrainMaxCtx) —
+	 *                   2026-07-07 (owner call): asymmetric now, the 12B gets a TIGHT window
+	 *                   (it's the expensive, rarely-invoked escalation path) while the E2B gets
+	 *                   its own wide one (resolveE2BContextSize() below) — they no longer share
+	 *                   a single cap. Was 16384 shared.
 	 * SUBVOCAL_LOCAL_CTX overrides either.
 	 */
 	private resolveContextSize(): number {
 		if (process.env.SUBVOCAL_LOCAL_CTX) return Number(process.env.SUBVOCAL_LOCAL_CTX);
 		return process.env.SUBVOCAL_LOCAL_DRAFT !== "0" || DUAL_BRAIN_ENABLED
-			? (activeProfile.dualBrainMaxCtx ?? 16384)
+			? (activeProfile.dualBrainMaxCtx ?? 8192)
 			: 32768;
+	}
+
+	/**
+	 * Context size for the E2B (drafter or dual-brain generator role), independent of the
+	 * 12B's — 2026-07-07 owner call: the cheap/fast model gets a generous window (32768) so it
+	 * can hold a long effective conversation on its own, while the expensive 12B stays tight.
+	 * As a drafter this is safe even though it's LARGER than the 12B's window: the shadow KV
+	 * only ever needs to hold as much of the conversation as the target actually has, so extra
+	 * allocated headroom is unused but harmless, not a correctness issue. SUBVOCAL_LOCAL_E2B_CTX
+	 * overrides.
+	 */
+	private resolveE2BContextSize(): number {
+		if (process.env.SUBVOCAL_LOCAL_E2B_CTX) return Number(process.env.SUBVOCAL_LOCAL_E2B_CTX);
+		return activeProfile.e2bMaxCtx ?? 32768;
 	}
 
 	private getModel(): ModelGPU {
@@ -398,9 +412,9 @@ export class LocalConversationEngine {
 	/**
 	 * The shared E2B instance (see the field comment). Lazy: loaded on the first turn that
 	 * needs any small-model role; freed with everything else in agent-worker's teardown path.
-	 * Context = the dual-model window (drafter shadow KV must span the same conversation as
-	 * the target; the generator's conversation lives in the same window). noKvOffload keeps
-	 * its KV in RAM, so 12B + one E2B fit the 16 GB budget (the REPL-validated pair).
+	 * Context = resolveE2BContextSize() (own window, independent of the 12B's — see that
+	 * method's comment). As a drafter, a shadow KV wider than the target it's shadowing is
+	 * fine: it only ever holds as much conversation as the 12B actually has.
 	 * MacE2BProfile.largeModelPath IS activeProfile.smallModelPath (same gguf).
 	 *
 	 * M11.3: `auxSeq: true` reserves a second, attention-isolated KV sequence (seq_id=1) —
@@ -412,7 +426,7 @@ export class LocalConversationEngine {
 	 */
 	private getE2B(): ModelGPU {
 		if (this.e2b) return this.e2b;
-		this.e2b = new ModelGPU(MacE2BProfile.largeModelPath, { ...MacE2BProfile.largeOpts, contextSize: this.resolveContextSize(), auxSeq: true });
+		this.e2b = new ModelGPU(MacE2BProfile.largeModelPath, { ...MacE2BProfile.largeOpts, contextSize: this.resolveE2BContextSize(), auxSeq: true });
 		return this.e2b;
 	}
 
@@ -471,7 +485,10 @@ export class LocalConversationEngine {
 	 *  weights stay warm in the page cache). */
 	private withDistiller<T>(fn: (m: ModelGPU) => T): T {
 		if (this.e2b) return fn(this.e2b);
-		const m = new ModelGPU(activeProfile.smallModelPath, { contextSize: 8192, threads: 4, gpuLayers: 999, noKvOffload: true });
+		// "Long-window" distiller: same E2B context budget as the shared instance
+		// (resolveE2BContextSize()), not the 12B's tighter one — it needs to see the OLD
+		// history being distilled, which can exceed the 12B's own window.
+		const m = new ModelGPU(activeProfile.smallModelPath, { contextSize: this.resolveE2BContextSize(), threads: 4, gpuLayers: 999, noKvOffload: true });
 		try {
 			return fn(m);
 		} finally {
