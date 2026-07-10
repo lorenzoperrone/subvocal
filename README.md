@@ -4,7 +4,7 @@
 [![Node.js 22+](https://img.shields.io/badge/Node.js-%3E%3D22.19-green?logo=node.js)](#-download-and-installation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-
+<img width="2048" height="1152" alt="Gemini_Generated_Image_af87h9af87h9af87 (1)" src="https://github.com/user-attachments/assets/1a07a9c9-709a-4075-9b26-add683f2191b" />
 
 > **⚠️ Disclaimer: This is a massive experiment (not for production use) ⚠️**
 >
