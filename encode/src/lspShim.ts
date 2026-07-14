@@ -14,28 +14,37 @@
  * instead of re-parsing the whole project.
  */
 
-import * as ts from 'typescript';
+import type * as tsType from 'typescript';
 import { readFileSync, statSync } from 'fs';
 import { join } from 'path';
+import { createRequire } from 'module';
 import { type SyntaxError } from './syntaxValidator.js';
+
+const require = createRequire(import.meta.url);
+let ts: typeof tsType | undefined;
+function getTs(): typeof tsType {
+	if (!ts) ts = require('typescript');
+	return ts!;
+}
 
 export type { SyntaxError };
 
 // ── Per-project LanguageService cache ───────────────────────────────────────────
 
 interface ProjectService {
-	service: ts.LanguageService;
+	service: tsType.LanguageService;
 	fileVersions: Map<string, string>;
 	rootFiles: Set<string>;
-	compilerOptions: ts.CompilerOptions;
+	compilerOptions: tsType.CompilerOptions;
 }
 
 const projectServices = new Map<string, ProjectService>();
 
-function loadCompilerOptions(projectDir: string): { options: ts.CompilerOptions; rootFiles: string[] } {
+function loadCompilerOptions(projectDir: string): { options: tsType.CompilerOptions; rootFiles: string[] } {
+	const tsObj = getTs();
 	const configPath = join(projectDir, 'tsconfig.json');
-	const configFile = ts.readConfigFile(configPath, (p) => readFileSync(p, 'utf-8'));
-	const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, projectDir);
+	const configFile = tsObj.readConfigFile(configPath, (p) => readFileSync(p, 'utf-8'));
+	const parsed = tsObj.parseJsonConfigFileContent(configFile.config, tsObj.sys, projectDir);
 	return { options: parsed.options, rootFiles: parsed.fileNames };
 }
 
@@ -43,28 +52,29 @@ function getOrCreateService(projectDir: string): ProjectService {
 	const existing = projectServices.get(projectDir);
 	if (existing) return existing;
 
+	const tsObj = getTs();
 	const { options, rootFiles } = loadCompilerOptions(projectDir);
 	const fileVersions = new Map<string, string>();
 	const rootFilesSet = new Set(rootFiles);
 
-	const host: ts.LanguageServiceHost = {
+	const host: tsType.LanguageServiceHost = {
 		getScriptFileNames: () => Array.from(rootFilesSet),
 		getScriptVersion: (fileName) => fileVersions.get(fileName) ?? '0',
 		getScriptSnapshot: (fileName) => {
-			if (!ts.sys.fileExists(fileName)) return undefined;
-			return ts.ScriptSnapshot.fromString(readFileSync(fileName, 'utf-8'));
+			if (!tsObj.sys.fileExists(fileName)) return undefined;
+			return tsObj.ScriptSnapshot.fromString(readFileSync(fileName, 'utf-8'));
 		},
 		getCurrentDirectory: () => projectDir,
 		getCompilationSettings: () => options,
-		getDefaultLibFileName: (opts) => ts.getDefaultLibFilePath(opts),
-		fileExists: ts.sys.fileExists,
-		readFile: ts.sys.readFile,
-		readDirectory: ts.sys.readDirectory,
-		directoryExists: ts.sys.directoryExists,
-		getDirectories: ts.sys.getDirectories,
+		getDefaultLibFileName: (opts) => tsObj.getDefaultLibFilePath(opts),
+		fileExists: tsObj.sys.fileExists,
+		readFile: tsObj.sys.readFile,
+		readDirectory: tsObj.sys.readDirectory,
+		directoryExists: tsObj.sys.directoryExists,
+		getDirectories: tsObj.sys.getDirectories,
 	};
 
-	const service = ts.createLanguageService(host, ts.createDocumentRegistry());
+	const service = tsObj.createLanguageService(host, tsObj.createDocumentRegistry());
 	const entry: ProjectService = { service, fileVersions, rootFiles: rootFilesSet, compilerOptions: options };
 	projectServices.set(projectDir, entry);
 	return entry;
@@ -111,11 +121,12 @@ export function typescriptDiagnostics(projectDir: string): SyntaxError[] {
 	return errors;
 }
 
-function diagnosticToSyntaxError(diagnostic: ts.Diagnostic): SyntaxError {
+function diagnosticToSyntaxError(diagnostic: tsType.Diagnostic): SyntaxError {
+	const tsObj = getTs();
 	let line = 0;
 	let column = 0;
 	if (diagnostic.file && diagnostic.start !== undefined) {
-		const pos = ts.getLineAndCharacterOfPosition(diagnostic.file, diagnostic.start);
+		const pos = tsObj.getLineAndCharacterOfPosition(diagnostic.file, diagnostic.start);
 		line = pos.line + 1;
 		column = pos.character + 1;
 	}

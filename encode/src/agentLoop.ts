@@ -23,7 +23,7 @@
  *   7. decodeAppend(observation) appends to KV cache, loop continues
  */
 
-import { ModelGPU, sample, sampleGreedy, SpeculativeDecoder, type DecoderConfig } from '@subvocal/synapse';
+import { ModelGPU, BaseModel, sample, sampleGreedy, SpeculativeDecoder, type DecoderConfig } from '@subvocal/synapse';
 import { activeProfile, type ModelProfile } from './modelProfile.js';
 import { preprocess, type PreprocessInput, type PreprocessResult } from './index.js';
 import { parseAssistantOutput, type ParsedToolCall, type ToolDefinition } from './toolParse.js';
@@ -100,7 +100,7 @@ const AGENT_TOOLS: ToolDefinition[] = [
 
 export interface AgentLoopConfig {
 	/** The large GPU model (already loaded). */
-	model: ModelGPU;
+	model: BaseModel;
 	/** Cap on generated tokens per turn. */
 	maxTokens?: number;
 	/** Temperature for sampling. Defaults to the active profile's defaultTemperature (0 if unset = greedy). */
@@ -244,7 +244,7 @@ export interface AgentStep {
 // ── Implementation ────────────────────────────────────────────────────────────
 
 export class AgentLoop {
-	private model: ModelGPU;
+	private model: BaseModel;
 	private maxTokens: number;
 	private temperature: number;
 	private topP?: number;
@@ -600,6 +600,17 @@ export class AgentLoop {
 			if (status !== 0) throw new Error(`prefill failed at token ${done} (llama_decode status ${status})`);
 			done = rung.tokenCount;
 			if (rungsSkipped) continue;
+
+			// M3.8 RAM protection: the KV snapshot holds a synchronous JS-owned copy of the KV
+			// cache (~600 MiB for 12B). If we enqueue multiple snapshots faster than the async
+			// background zstd+disk writer can drain them, we hoard multiple 600 MiB buffers in
+			// the promise closures, causing massive RAM spikes. If the writer is busy, skip the
+			// opportunistic rung snapshot completely rather than stalling the GPU decode.
+			if (this.activeColdWrites >= 1) {
+				rungsSkipped = true;
+				continue;
+			}
+
 			const snap = this.coldStore.snapshot(this.model, rung.text, rung.tokenCount, 'cold');
 			const budget = this.coldStore.budget;
 			if (budget > 0 && snap.totalSize * (rungs.length + 1) > budget / 2) {
@@ -624,6 +635,8 @@ export class AgentLoop {
 		this.queueColdWrite(this.coldStore.snapshot(this.model, prompt, promptTokens.length, 'cold'));
 	}
 
+	private activeColdWrites = 0;
+
 	/**
 	 * Fire-and-forget a checkpoint write, tracked for flushColdWrites(). Writes are CHAINED
 	 * (one in flight at a time, 2026-07 KV audit): each writeSnapshot holds a shuffle copy +
@@ -634,9 +647,12 @@ export class AgentLoop {
 	 * affect correctness — only when each hits the SSD.
 	 */
 	private queueColdWrite(snap: ReturnType<KVColdStore['snapshot']>): void {
+		this.activeColdWrites++;
 		this.coldWriteChain = this.coldWriteChain.then(() =>
 			this.coldStore!.writeSnapshot(snap).catch(err => {
 				console.warn(`[coldStore] background checkpoint write failed: ${(err as Error).message}`);
+			}).finally(() => {
+				this.activeColdWrites--;
 			}),
 		);
 		this.pendingColdWrites.push(this.coldWriteChain);
@@ -789,7 +805,7 @@ export class AgentLoop {
 	 * poison), forcing a malformed call the parser rejects. 'exclusive' keeps the full set.
 	 */
 	private makeSteering(tagMap: Map<number, string>): IdeogramSteering {
-		const cfg: SteeringConfig = { model: this.model, tagMap, onToken: this.onToken };
+		const cfg: SteeringConfig = { model: this.model as ModelGPU, tagMap, onToken: this.onToken };
 		if (this.steeringPromptMode === 'hybrid') cfg.poisonPatterns = TURN_POISON;
 		return new IdeogramSteering(cfg);
 	}
@@ -1273,7 +1289,7 @@ export class AgentLoop {
 						emitted = [next];
 					}
 				} else {
-					const result = this.model.mtpVerifyBatch(draft);
+					const result = (this.model as ModelGPU).mtpVerifyBatch(draft);
 					acceptedCount = result[0];
 					emitted = Array.from(result.slice(1));
 					viaVerify = true;

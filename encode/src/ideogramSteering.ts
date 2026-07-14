@@ -296,8 +296,8 @@ export class IdeogramSteering {
 		for (const re of this.poison) {
 			if (re.test(combined)) return true;
 		}
-		// Token is safe — accumulate
-		this.accumulatedText = combined;
+		// Token is safe — accumulate, but cap at 50 chars to avoid O(N^2) string growth and regex matching
+		this.accumulatedText = combined.length > 50 ? combined.slice(-50) : combined;
 		return false;
 	}
 }

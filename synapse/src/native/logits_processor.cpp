@@ -174,8 +174,23 @@ void LogitProcessor::Apply(float* logits) {
 
     if (has_steering_) {
         const size_t sz = std::min<size_t>(steering_vector_.size(), static_cast<size_t>(vocab_size_));
+#ifdef __AVX2__
+        const __m256 strength256 = _mm256_set1_ps(steering_strength_);
+        size_t i = 0;
+        for (; i + 8 <= sz; i += 8) {
+            __m256 v = _mm256_loadu_ps(&steering_vector_[i]);
+            __m256 l = _mm256_loadu_ps(&logits[i]);
+            __m256 scaled = _mm256_mul_ps(v, strength256);
+            l = _mm256_add_ps(l, scaled);
+            _mm256_storeu_ps(&logits[i], l);
+        }
+        for (; i < sz; ++i) {
+            logits[i] += steering_vector_[i] * steering_strength_;
+        }
+#else
         for (size_t i = 0; i < sz; ++i) {
             logits[i] += steering_vector_[i] * steering_strength_;
         }
+#endif
     }
 }

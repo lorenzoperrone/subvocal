@@ -299,6 +299,18 @@ Model::Model(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Model>(info) {
   // must not see or affect the live conversation. OFF by default (n_seq_max stays 1, matching
   // every model load before this option existed).
   bool aux_seq = false;
+  // Micro-batch size (0 = library default, 512). The worst-case compute-graph reserve holds a
+  // fp32 logits tensor of n_vocab × n_ubatch — at Gemma's 262144-token vocab the default makes
+  // that 512 MiB of anonymous memory PER CONTEXT (measured 2026-07-08: 518-528 MiB compute
+  // buffers at any ctx size, ~all of it this tensor), and the compact-SWA cache (patch 102) is
+  // sized n_swa + n_ubatch cells, so a smaller n_ubatch shrinks that too. Decode and specdec
+  // verify batches (K ≤ 32) sit far below either value — only prefill throughput trades off.
+  // SUBVOCAL_UBATCH env sets the process-wide default; opts.nUbatch overrides per instance.
+  uint32_t n_ubatch = 0;
+  if (const char* env_ubatch = std::getenv("SUBVOCAL_UBATCH")) {
+    int v = std::atoi(env_ubatch);
+    if (v > 0) n_ubatch = (uint32_t)v;
+  }
 
   if (info.Length() > 1 && info[1].IsObject()) {
     auto opts = info[1].As<Napi::Object>();
@@ -312,6 +324,7 @@ Model::Model(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Model>(info) {
     if (opts.Has("captureLayerHidden")) capture_layers = opts.Get("captureLayerHidden").ToBoolean().Value();
     if (opts.Has("noKvOffload")) offload_kqv = !opts.Get("noKvOffload").ToBoolean().Value();
     if (opts.Has("auxSeq")) aux_seq = opts.Get("auxSeq").ToBoolean().Value();
+    if (opts.Has("nUbatch")) n_ubatch = opts.Get("nUbatch").As<Napi::Number>().Uint32Value();
     if (opts.Has("kvType")) {
       std::string s = opts.Get("kvType").As<Napi::String>();
       if (s == "q8_0")      kv_type = GGML_TYPE_Q8_0;
@@ -350,7 +363,10 @@ Model::Model(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Model>(info) {
 
   llama_context_params cparams = llama_context_default_params();
   cparams.n_ctx = n_ctx;
-  // Leave n_batch / n_ubatch at library defaults for cache locality.
+  // n_batch stays at the library default (2048): the JS-facing prefill paths chunk their
+  // llama_decode calls at CHUNK=2048 to match it. n_ubatch (micro-batch) is tunable — see the
+  // comment at its declaration; clamped to n_batch (llama.cpp requires n_ubatch <= n_batch).
+  if (n_ubatch > 0) cparams.n_ubatch = std::min(n_ubatch, cparams.n_batch);
   cparams.n_threads = n_threads;
   cparams.n_threads_batch = n_threads_batch;
   cparams.embeddings = embeddings;

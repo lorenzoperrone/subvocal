@@ -11,7 +11,9 @@ const CPU_PATH = resolve(here, "..", "build-cpu", "Release", "subvocal_ffi_cpu.n
 // backend in this repo at all. "build-gpu/subvocal_ffi_gpu.node" never exists here; it was a
 // leftover path from the Linux/CUDA port this was copied from. ModelGPU/getGpuBinding() still
 // mean "the GPU-accelerated backend" generically -- on this platform that's always Metal.
-const GPU_PATH = resolve(here, "..", "build-metal", "subvocal_ffi_metal.node");
+const GPU_PATH = process.platform === "darwin"
+	? resolve(here, "..", "build-metal", "subvocal_ffi_metal.node")
+	: resolve(here, "..", "build-gpu", "Release", "subvocal_ffi_gpu.node");
 
 interface NativeModel {
 	tokenize(text: string, addSpecial?: boolean, parseSpecial?: boolean): Int32Array;
@@ -103,6 +105,7 @@ interface NativeBinding {
 			kvType?: "f16" | "q8_0" | "q5_1" | "q4_0";
 			loraPath?: string;
 			loraScale?: number;
+			nUbatch?: number;
 		},
 	) => NativeModel;
 	/** Substory 1.4: AVX2 byte-scan. Returns offsets of needle in haystack. */
@@ -194,6 +197,16 @@ export interface ModelOptions {
 	 * model construction before this option existed is unaffected (n_seq_max stays 1).
 	 */
 	auxSeq?: boolean;
+	/**
+	 * Micro-batch size (cparams.n_ubatch; 0/unset = library default, 512). The worst-case
+	 * compute-graph reserve holds an n_vocab × n_ubatch fp32 logits tensor — at Gemma's 262144
+	 * vocab the default costs ~512 MiB of anonymous memory PER CONTEXT (measured 2026-07-08),
+	 * and the compact-SWA cache is sized n_swa + n_ubatch cells, so smaller values shrink both.
+	 * Decode and specdec verify batches (K ≤ 32) are unaffected; only prefill throughput trades
+	 * off. Clamped to n_batch (2048) natively. The SUBVOCAL_UBATCH env var sets a process-wide
+	 * default; this option overrides it per instance.
+	 */
+	nUbatch?: number;
 }
 
 export abstract class BaseModel {
@@ -212,7 +225,8 @@ export abstract class BaseModel {
 	}
 	forwardAsync(tokens: Int32Array): Promise<number> {
 		this.assertAlive();
-		return this.native.forwardAsync(tokens);
+		if (this.native.forwardAsync) return this.native.forwardAsync(tokens);
+		return Promise.resolve(this.native.forward(tokens));
 	}
 	/**
 	 * V7: incremental decode. Appends `tokens` onto the KV cache left by the
@@ -228,7 +242,8 @@ export abstract class BaseModel {
 	}
 	decodeAppendAsync(tokens: Int32Array, allLogits = false): Promise<number> {
 		this.assertAlive();
-		return this.native.decodeAppendAsync(tokens, allLogits);
+		if (this.native.decodeAppendAsync) return this.native.decodeAppendAsync(tokens, allLogits);
+		return Promise.resolve(this.native.decodeAppend(tokens, allLogits));
 	}
 	/**
 	 * M11.3 variant (b): decode `tokens` onto sequence `seqId` at position `pos`, instead of
@@ -239,7 +254,8 @@ export abstract class BaseModel {
 	 */
 	decodeAppendSeq(tokens: Int32Array, seqId: number, pos: number, allLogits = false): Promise<number> {
 		this.assertAlive();
-		return this.native.decodeAppendSeq(tokens, seqId, pos, allLogits);
+		if (this.native.decodeAppendSeq) return this.native.decodeAppendSeq(tokens, seqId, pos, allLogits);
+		throw new Error("decodeAppendSeq is not implemented on CPU backend");
 	}
 	/**
 	 * V7.1: reposition the internal n_past_ counter without touching the KV cache.

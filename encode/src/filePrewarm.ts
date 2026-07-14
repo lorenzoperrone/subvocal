@@ -54,20 +54,35 @@ export function prewarmFile(
  * Per-session cache of prewarm results, keyed by filePath. A cached entry is valid only
  * while `fileContent` matches exactly -- any edit invalidates it for free, no CRC/hash
  * machinery needed since preprocess() always has the current fileContent to compare against.
+ * 
+ * Implements a simple LRU policy capped at 50 entries to prevent unbounded RAM growth
+ * across long coding sessions.
  */
 export class FilePrewarmCache {
 	private entries = new Map<string, FilePrewarmResult>();
+	private readonly maxSize = 50;
 
 	/** Returns the cached result only if still valid for the given fileContent + multiFile need. */
 	get(filePath: string, fileContent: string, needMultiFile = false): FilePrewarmResult | undefined {
 		const entry = this.entries.get(filePath);
 		if (!entry || entry.fileContent !== fileContent) return undefined;
 		if (needMultiFile && entry.multiFileBlocks === undefined) return undefined;
+		
+		// LRU bump
+		this.entries.delete(filePath);
+		this.entries.set(filePath, entry);
 		return entry;
 	}
 
 	set(result: FilePrewarmResult): void {
+		this.entries.delete(result.filePath);
 		this.entries.set(result.filePath, result);
+		if (this.entries.size > this.maxSize) {
+			const oldestKey = this.entries.keys().next().value;
+			if (oldestKey !== undefined) {
+				this.entries.delete(oldestKey);
+			}
+		}
 	}
 
 	/** Prewarm now and store the result -- what a future "file opened" caller would invoke. */

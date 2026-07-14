@@ -94,16 +94,28 @@ export interface LineHashSnapshot {
  * @returns        Snapshot with line hashes and foldedpresso file hash.
  */
 export function buildLineHashSnapshot(content: string): LineHashSnapshot {
-  const lines = content.split(/\r?\n/);
-  const lineHashes = new Uint32Array(lines.length);
-  for (let i = 0; i < lines.length; i++) {
-    lineHashes[i] = murmurHash3(lines[i], i); // per-line seed avoids collisions on identical lines
+  let lineCount = 1;
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 10) lineCount++;
   }
 
-  // Fold all line hashes into a single file hash via XOR
+  const lineHashes = new Uint32Array(lineCount);
   let fileHash = 0;
-  for (const h of lineHashes) {
-    fileHash ^= h;
+  let lineStart = 0;
+  let lineIdx = 0;
+
+  for (let i = 0; i <= content.length; i++) {
+    if (i === content.length || content.charCodeAt(i) === 10) {
+      let end = i;
+      if (end > lineStart && content.charCodeAt(end - 1) === 13) {
+        end--;
+      }
+      const lineStr = content.slice(lineStart, end);
+      const h = murmurHash3(lineStr, lineIdx);
+      lineHashes[lineIdx++] = h;
+      fileHash ^= h;
+      lineStart = i + 1;
+    }
   }
 
   return { lineHashes, fileHash };

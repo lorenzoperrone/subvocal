@@ -102,14 +102,29 @@ const REGISTRY_CHARS: Set<string> = new Set(REGISTRY.map((e) => e.char));
  */
 export function stripRegistryTags(s: string, dropFollowingSpace: boolean): string {
 	let out = '';
-	const chars = [...s];
-	for (let i = 0; i < chars.length; i++) {
-		if (REGISTRY_CHARS.has(chars[i])) {
-			if (dropFollowingSpace && chars[i + 1] === ' ') i++; // consume the separator too
-			continue;
+	let start = 0;
+	let i = 0;
+	while (i < s.length) {
+		const code = s.charCodeAt(i);
+		let charLen = 1;
+		if (code >= 0xD800 && code <= 0xDBFF && i + 1 < s.length) {
+			charLen = 2;
 		}
-		out += chars[i];
+		const char = charLen === 1 ? s[i] : s.slice(i, i + 2);
+
+		if (REGISTRY_CHARS.has(char)) {
+			out += s.slice(start, i);
+			i += charLen;
+			if (dropFollowingSpace && i < s.length && s[i] === ' ') {
+				i++;
+			}
+			start = i;
+		} else {
+			i += charLen;
+		}
 	}
+	if (start === 0) return s;
+	out += s.slice(start);
 	return out;
 }
 

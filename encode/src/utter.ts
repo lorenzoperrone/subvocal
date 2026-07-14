@@ -39,7 +39,7 @@ import { gitInit, gitStageAll, gitCommit } from '@subvocal/synapse';
 import { editASTNode, insertAfterNode, type ASTEditInput, type ASTEditResult } from './astEditor.js';
 import { detectLanguage } from './astTagger.js';
 import { PipelineController } from './dualBrainPipeline.js';
-import { ModelGPU, type BaseModel } from '@subvocal/synapse';
+import { ModelGPU, ModelCPU, type BaseModel } from '@subvocal/synapse';
 import { MacE2BProfile } from './modelProfile.js';
 import { detagCandidates, routeTask, shouldEscalate } from './dualBrainRouter.js';
 import { WorkerIntentClassifier } from './workerIntent.js';
@@ -116,7 +116,7 @@ export interface UtterSession {
 	 */
 	filePrewarmCache: FilePrewarmCache;
 	/** M12.2: E2B generator model + loop, present only when config.dualBrain is set. */
-	smallGenModel?: ModelGPU | null;
+	smallGenModel?: BaseModel | null;
 	smallLoop?: AgentLoop | null;
 	/** M12.3: E2B drafter instance (default on, SUBVOCAL_DRAFT=off to disable) — shadow context for two-model specdec. */
 	draftModel?: ModelGPU | null;
@@ -188,19 +188,24 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 	});
 	const largeModel = getLargeModel();
 
-	// M12.3: E2B drafter for two-model speculative decoding (1.90x measured,
-	// doc/research/exclusions-sweep-2026-07.md), on by default — opt out with SUBVOCAL_DRAFT=off.
-	// It costs the E2B weights (2.4 GiB mmap, shared with any other E2B instance) plus a shadow KV sized
-	// to the large model's live context. Deliberately its OWN instance — the M11.2 classifier
-	// and the M12.2 smallGenModel have their own KV lifecycles a drafter would clobber.
-	let draftModel: ModelGPU | null = null;
-	if ((process.env.SUBVOCAL_DRAFT ?? 'on') !== 'off') {
-		draftModel = new ModelGPU(config.smallModelPath, {
-			contextSize: largeCtx ?? activeProfile.largeOpts.contextSize,
+	// M12.3: Single shared E2B GPU instance for intent, specdec (drafter), and generator.
+	// Matches the production TUI architecture (conversation.ts) to avoid VRAM duplication.
+	let sharedE2B: ModelGPU | null = null;
+	const needE2B = !config.cpuOff || (process.env.SUBVOCAL_DRAFT ?? 'on') !== 'off' || config.dualBrain;
+	if (needE2B) {
+		const contextSize = activeProfile.e2bMaxCtx ?? 32768;
+		sharedE2B = new ModelGPU(config.smallModelPath, {
+			contextSize,
 			threads: 4,
 			gpuLayers: 999,
 		});
-		console.log('[draft] E2B drafter loaded (default ON): two-model specdec active');
+		console.log(`🧠 Shared E2B GPU model loaded: ${config.smallModelPath} (context: ${contextSize})`);
+	}
+
+	let draftModel: ModelGPU | null = null;
+	if ((process.env.SUBVOCAL_DRAFT ?? 'on') !== 'off' && sharedE2B) {
+		draftModel = sharedE2B;
+		console.log('[draft] E2B drafter loaded (shared): two-model specdec active');
 	}
 
 	const loop = new AgentLoop({
@@ -221,16 +226,10 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 		? new PipelineController()
 		: undefined;
 
-	// M12.2: dual-brain generation — a SECOND E2B instance dedicated to generating (own KV
-	// context; the classifier instance from --cpu-model on stays untouched). Its AgentLoop
-	// runs MacE2BProfile (bare model-turn openers — E2B's real template) and gets its own
-	// cold-store namespace automatically (per-model subdir, see AgentLoop's constructor).
-	let smallGenModel: ModelGPU | null = null;
+	let smallGenModel: BaseModel | null = null;
 	let smallLoop: AgentLoop | null = null;
-	if (config.dualBrain) {
-		smallGenModel = new ModelGPU(MacE2BProfile.largeModelPath, {
-			...MacE2BProfile.largeOpts,
-		});
+	if (config.dualBrain && sharedE2B) {
+		smallGenModel = sharedE2B;
 		smallLoop = new AgentLoop({
 			model: smallGenModel,
 			profile: MacE2BProfile,
@@ -239,7 +238,7 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 			useSteering: false,
 			onToken: config.quiet ? undefined : (text: string) => process.stdout.write(text),
 		});
-		console.log(`[dualBrain] E2B generator loaded: ${MacE2BProfile.largeModelPath}`);
+		console.log(`[dualBrain] E2B generator loaded (shared): ${MacE2BProfile.largeModelPath}`);
 	}
 
 	return {

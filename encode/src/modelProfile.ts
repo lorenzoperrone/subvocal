@@ -35,7 +35,7 @@ function nativeQuote(s: string): string {
 // ── Profile interface ─────────────────────────────────────────────────────────
 
 export interface ModelProfile {
-  readonly name: 'gemma4' | 'qwen3' | 'mac' | 'mac-e2b';
+  readonly name: 'gemma4' | 'qwen3' | 'mac' | 'mac-e2b' | 'linux-e2b';
 
   // ── Model paths ───────────────────────────────────────────────────────────
   readonly smallModelPath: string;
@@ -227,8 +227,8 @@ export const subvocalContextSize = CTX;
 export const Gemma4Profile: ModelProfile = {
   name: 'gemma4',
 
-  smallModelPath: `${MODEL_DIR}/unsloth-gemma-4-E2B-it-qat-GGUF/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf`,
-  largeModelPath: `${MODEL_DIR}/unsloth-gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf`,
+  smallModelPath: path.join(__dirname, '../../models/unsloth-gemma-4-E2B-it-qat-GGUF/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf'),
+  largeModelPath: path.join(__dirname, '../../models/unsloth-gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf'),
 
   vocabSize: 262144,
   eotTokenIds: [106, 1, 50, 212],  // <turn|>, <eos>, <|tool_response|>, </s>
@@ -307,10 +307,13 @@ export const Gemma4Profile: ModelProfile = {
     },
   },
 
-  smallOpts: { contextSize: 4096, threads: 8, gpuLayers: 0 },
+  smallBackend: 'gpu',
+  smallOpts: { contextSize: 4096, threads: 8, gpuLayers: 999 },
+  dualBrainMaxCtx: 8192,
+  e2bMaxCtx: 32768,
   // largeOpts reflects the warm tier default (64k in RAM, ISWA split active).
   // llama_init_from_model() directly — no CUDA warmup pass, so large ctx works without --no-warmup.
-  largeOpts:  { contextSize: CTX, threads: 4, gpuLayers: 30, noKvOffload: true },
+  largeOpts:  { contextSize: CTX, threads: 4, gpuLayers: 999, noKvOffload: false },
 };
 
 // ── Mac profile (Apple Silicon, Metal backend) ────────────────────────────────
@@ -563,7 +566,6 @@ export const MacE2BProfile: ModelProfile = {
   // is — 16k is plenty for the easy-edit band this profile exists for.
   largeOpts: { contextSize: 16384, threads: 4, gpuLayers: 999, noKvOffload: true },
 };
-
 // ── Qwen 2.5 Coder profile ─────────────────────────────────────────────────────
 //
 // CPU small : Qwen3.5-0.8B IQ2_XXS (vocab 151936) — intent routing only
@@ -643,7 +645,7 @@ const PROFILE_MAP: Record<string, ModelProfile> = {
   mac:    MacProfile,
 };
 
-const profileName = (process.env.SUBVOCAL_MODEL_PROFILE ?? 'mac').toLowerCase();
+const profileName = (process.env.SUBVOCAL_MODEL_PROFILE ?? (process.platform === 'darwin' ? 'mac' : 'gemma4')).toLowerCase();
 
 export const activeProfile: ModelProfile = PROFILE_MAP[profileName] ?? MacProfile;
 

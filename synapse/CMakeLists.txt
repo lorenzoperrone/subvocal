@@ -9,9 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Strip the local checkout's absolute path from __FILE__/assert/debug-info strings baked into
-# the compiled addon — without this, every user's own home-directory path ends up embedded in
-# the shipped binary. Applies to synapse's own sources; llama.cpp's static libs get the matching
-# flag from their own build invocation (see install.sh).
+# the compiled addon — matters for the release/ copy (ships publicly); harmless here too.
 get_filename_component(SUBVOCAL_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 add_compile_options(-ffile-prefix-map=${SUBVOCAL_REPO_ROOT}=/subvocal)
 

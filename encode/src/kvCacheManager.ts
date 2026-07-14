@@ -92,14 +92,12 @@ function buildLineToTokenMap(
 	content: string,
 	tokenIds: Int32Array,
 ): Map<number, TokenRange> {
-	const lineStarts = new Int32Array(content.length + 1);
-	for (let i = 0; i < content.length; i++) {
-		lineStarts[i] = content.charCodeAt(i) === 10 ? 1 : 0; // newline flag
-	}
 	// Cumulative line start offsets
 	const lineByteOffset: number[] = [0];
 	for (let i = 0; i < content.length; i++) {
-		if (lineStarts[i]) lineByteOffset.push(i + 1);
+		if (content.charCodeAt(i) === 10) {
+			lineByteOffset.push(i + 1);
+		}
 	}
 	// Trim trailing empty line
 	while (lineByteOffset.length > 1 && lineByteOffset[lineByteOffset.length - 1] >= content.length) {

@@ -123,6 +123,7 @@ class Model : public Napi::ObjectWrap<Model> {
   llama_context* ctx_ = nullptr;
   int32_t n_vocab_ = 0;
   uint32_t n_ctx_ = 0;
+  uint32_t n_ubatch_ = 0;  // effective nUbatch override (0 = library default); forks inherit it
   int32_t n_embd_ = 0;
   int32_t n_layer_ = 0;
   bool embeddings_enabled_ = false;
@@ -334,6 +335,15 @@ Model::Model(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Model>(info) {
   int32_t n_gpu_layers = 0;
   bool embeddings = false;       // V3: opt-in to extract hidden state from forward()
   bool capture_layers = false;   // V3.2: opt-in to capture per-layer hidden states
+  // Micro-batch size (0 = library default, 512). Same option as binding_gpu.cpp — see the
+  // full rationale there: the worst-case compute-graph reserve holds an n_vocab × n_ubatch
+  // fp32 logits tensor (512 MiB per context at Gemma's 262144 vocab with the default).
+  // SUBVOCAL_UBATCH env sets the process-wide default; opts.nUbatch overrides per instance.
+  uint32_t n_ubatch = 0;
+  if (const char* env_ubatch = std::getenv("SUBVOCAL_UBATCH")) {
+    int v = std::atoi(env_ubatch);
+    if (v > 0) n_ubatch = (uint32_t)v;
+  }
 
   if (info.Length() > 1 && info[1].IsObject()) {
     auto opts = info[1].As<Napi::Object>();
@@ -343,6 +353,7 @@ Model::Model(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Model>(info) {
     if (opts.Has("gpuLayers")) n_gpu_layers = opts.Get("gpuLayers").As<Napi::Number>().Int32Value();
     if (opts.Has("embeddings")) embeddings = opts.Get("embeddings").ToBoolean().Value();
     if (opts.Has("captureLayerHidden")) capture_layers = opts.Get("captureLayerHidden").ToBoolean().Value();
+    if (opts.Has("nUbatch")) n_ubatch = opts.Get("nUbatch").As<Napi::Number>().Uint32Value();
   }
   if (n_threads_batch == 0) n_threads_batch = n_threads;
   n_threads_ = n_threads;
@@ -361,7 +372,10 @@ Model::Model(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Model>(info) {
 
   llama_context_params cparams = llama_context_default_params();
   cparams.n_ctx = n_ctx;
-  // Leave n_batch / n_ubatch at library defaults (typically 2048 / 512).
+  // n_batch stays at the library default (2048): prefill paths chunk llama_decode at
+  // CHUNK=2048 to match. n_ubatch is tunable (see declaration); clamped to n_batch.
+  if (n_ubatch > 0) cparams.n_ubatch = std::min(n_ubatch, cparams.n_batch);
+  n_ubatch_ = n_ubatch;
   cparams.n_threads = n_threads;
   cparams.n_threads_batch = n_threads_batch;
   cparams.embeddings = embeddings;
@@ -1126,6 +1140,7 @@ Napi::Value Model::ForkContext(const Napi::CallbackInfo& info) {
 
   llama_context_params cparams = llama_context_default_params();
   cparams.n_ctx = n_ctx_;
+  if (n_ubatch_ > 0) cparams.n_ubatch = std::min(n_ubatch_, cparams.n_batch);
   cparams.n_threads = n_threads_;
   cparams.n_threads_batch = n_threads_batch_;
   cparams.embeddings = embeddings_enabled_;
@@ -1142,6 +1157,7 @@ Napi::Value Model::ForkContext(const Napi::CallbackInfo& info) {
   fork->ctx_ = new_ctx;
   fork->n_vocab_ = n_vocab_;
   fork->n_ctx_ = n_ctx_;
+  fork->n_ubatch_ = n_ubatch_;
   fork->n_embd_ = n_embd_;
   fork->n_layer_ = n_layer_;
   fork->n_threads_ = n_threads_;

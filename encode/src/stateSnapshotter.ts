@@ -35,7 +35,7 @@
  * JS (no intervening decode), so rollback is a consistent no-op-or-rewind there.
  */
 
-import type { ModelGPU } from '@subvocal/synapse';
+import type { BaseModel } from '@subvocal/synapse';
 import type { TagInjection } from './astTagger.js';
 
 // ── AST snapshot ───────────────────────────────────────────────────────────────
@@ -60,10 +60,10 @@ interface SnapshotEntry {
 // ── Implementation ─────────────────────────────────────────────────────────────
 
 export class StateSnapshotter {
-	private model: ModelGPU;
+	private model: BaseModel;
 	private stack: SnapshotEntry[] = [];
 
-	constructor(model: ModelGPU) {
+	constructor(model: BaseModel) {
 		this.model = model;
 	}
 
