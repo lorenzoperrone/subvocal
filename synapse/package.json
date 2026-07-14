@@ -5,7 +5,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "build/Release/*.node", "src/native", "CMakeLists.txt"],
+  "files": [
+    "dist",
+    "build/Release/*.node",
+    "src/native",
+    "CMakeLists.txt"
+  ],
   "scripts": {
     "build:cpu": "cmake-js compile --out build-cpu --CDSUBVOCAL_BACKEND=cpu",
     "build:gpu": "cmake-js compile --out build-gpu --CDSUBVOCAL_BACKEND=gpu",
@@ -24,6 +29,6 @@
   },
   "devDependencies": {
     "cmake-js": "8.0.0",
-    "vitest": "3.2.6"
+    "vitest": "^3.2.6"
   }
 }
