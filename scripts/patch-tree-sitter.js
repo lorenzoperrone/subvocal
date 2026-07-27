@@ -11,49 +11,54 @@ const rootDir = path.resolve(__dirname, '..');
  */
 function findTreeSitterIndexFiles(dir, files = []) {
   if (!fs.existsSync(dir)) return files;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
 
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'tree-sitter' && path.basename(dir) === 'node_modules') {
-        const indexPath = path.join(fullPath, 'index.js');
-        if (fs.existsSync(indexPath)) {
-          files.push(indexPath);
-        }
-      } else {
-        if (!['.git', 'dist', 'build', '.cache'].includes(entry.name)) {
-          findTreeSitterIndexFiles(fullPath, files);
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'tree-sitter' && path.basename(dir) === 'node_modules') {
+          const indexPath = path.join(fullPath, 'index.js');
+          if (fs.existsSync(indexPath)) {
+            files.push(indexPath);
+          }
+        } else {
+          if (!['.git', 'dist', 'build', '.cache'].includes(entry.name)) {
+            findTreeSitterIndexFiles(fullPath, files);
+          }
         }
       }
     }
+  } catch (e) {
+    // Ignore permission or unreadable directory errors
   }
 
   return files;
 }
 
 function patchTreeSitterFile(filePath) {
-  let content = fs.readFileSync(filePath, 'utf8');
+  try {
+    let content = fs.readFileSync(filePath, 'utf8');
 
-  if (content.includes('_languageSubclasses')) {
-    console.log(`[patch-tree-sitter] Already patched: ${filePath}`);
-    return;
-  }
+    if (content.includes('_languageSubclasses')) {
+      console.log(`[patch-tree-sitter] Already patched: ${filePath}`);
+      return;
+    }
 
-  console.log(`[patch-tree-sitter] Patching Node 24 compatibility in: ${filePath}`);
+    console.log(`[patch-tree-sitter] Patching Node 24 compatibility in: ${filePath}`);
 
-  const targetBindingMarker = "const {Query, Parser, NodeMethods, Tree, TreeCursor, LookaheadIterator} = binding;";
-  if (!content.includes(targetBindingMarker)) {
-    console.warn(`[patch-tree-sitter] Warning: binding marker not found in ${filePath}`);
-    return;
-  }
+    const targetBindingMarker = "const {Query, Parser, NodeMethods, Tree, TreeCursor, LookaheadIterator} = binding;";
+    if (!content.includes(targetBindingMarker)) {
+      console.warn(`[patch-tree-sitter] Warning: binding marker not found in ${filePath}`);
+      return;
+    }
 
-  const patchWeakMap = `${targetBindingMarker}\n\n// SUBVOCAL: Node.js 24 compatibility — language objects from N-API are non-extensible\nconst _languageSubclasses = new WeakMap();`;
-  content = content.replace(targetBindingMarker, patchWeakMap);
+    const patchWeakMap = `${targetBindingMarker}\n\n// SUBVOCAL: Node.js 24 compatibility — language objects from N-API are non-extensible\nconst _languageSubclasses = new WeakMap();`;
+    content = content.replace(targetBindingMarker, patchWeakMap);
 
-  const targetSetLang = "Parser.prototype.setLanguage = function(language) {";
-  if (content.includes(targetSetLang) && !content.includes("_languageSubclasses.has")) {
-    const replacementSetLang = `Parser.prototype.setLanguage = function(language) {
+    const targetSetLang = "Parser.prototype.setLanguage = function(language) {";
+    if (content.includes(targetSetLang) && !content.includes("_languageSubclasses.has")) {
+      const replacementSetLang = `Parser.prototype.setLanguage = function(language) {
   if (this instanceof Parser && setLanguage) {
     setLanguage.call(this, language);
   }
@@ -63,21 +68,24 @@ function patchTreeSitterFile(filePath) {
   }
   return this;
 };`;
-    content = content.replace(/Parser\.prototype\.setLanguage = function\(language\) \{[\s\S]*?return this;\n\};/, replacementSetLang);
+      content = content.replace(/Parser\.prototype\.setLanguage = function\(language\) \{[\s\S]*?return this;\r?\n\};/, replacementSetLang);
+    }
+
+    content = content.replace(
+      /:\s*\(tree\.language\.nodeSubclasses \|\| \[\]\)\[nodeTypeId\];/,
+      ": (_languageSubclasses.get(tree.language) || [])[nodeTypeId];"
+    );
+
+    content = content.replace(
+      /language\.nodeSubclasses = nodeSubclasses;/,
+      "try { language.nodeSubclasses = nodeSubclasses } catch (_) {}\n  _languageSubclasses.set(language, nodeSubclasses)"
+    );
+
+    fs.writeFileSync(filePath, content, 'utf8');
+    console.log(`[patch-tree-sitter] Successfully patched: ${filePath}`);
+  } catch (err) {
+    console.warn(`[patch-tree-sitter] Could not patch ${filePath}:`, err.message);
   }
-
-  content = content.replace(
-    /:\s*\(tree\.language\.nodeSubclasses \|\| \[\]\)\[nodeTypeId\];/,
-    ": (_languageSubclasses.get(tree.language) || [])[nodeTypeId];"
-  );
-
-  content = content.replace(
-    /language\.nodeSubclasses = nodeSubclasses;/,
-    "try { language.nodeSubclasses = nodeSubclasses } catch (_) {}\n  _languageSubclasses.set(language, nodeSubclasses)"
-  );
-
-  fs.writeFileSync(filePath, content, 'utf8');
-  console.log(`[patch-tree-sitter] Successfully patched: ${filePath}`);
 }
 
 function main() {
