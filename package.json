@@ -1,6 +1,7 @@
 {
   "name": "subvocal",
   "version": "0.0.2",
+  "type": "module",
   "private": true,
   "description": "Tensor-native local coding agent: in-process GGUF inference (CPU + GPU) with AST-aware preprocessing, logit-level steering, speculative decoding, and dual-brain orchestration.",
   "repository": {
@@ -19,6 +20,7 @@
     "subvocal": "bin/subvocal"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-tree-sitter.js",
     "build:synapse": "npm run build -w synapse",
     "build:encode": "npm run build -w encode",
     "build": "npm run build:synapse && npm run build:encode",
