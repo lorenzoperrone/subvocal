@@ -20,6 +20,7 @@
 import { spawnSync } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
 import { extname } from 'path';
+import ts from 'typescript';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ export interface CompileResult {
 	/** Human-readable error summary for distillation. Empty when ok. */
 	message: string;
 	/** Which tool ran, or 'skipped' when no applicable compiler exists. */
-	tool: 'py_compile' | 'skipped';
+	tool: 'py_compile' | 'tsc' | 'skipped';
 	durationMs: number;
 }
 
@@ -42,14 +43,50 @@ export interface CompileResult {
  * @param content   Source code string to validate (written to tmpfile if needed).
  */
 export function compileCheck(filePath: string, content: string): CompileResult {
+	if (!filePath) return { ok: true, message: '', tool: 'skipped', durationMs: 0 };
+	const safeContent = typeof content === 'string' ? content : String(content ?? '');
 	const ext = extname(filePath).toLowerCase();
 
 	if (ext === '.py' || ext === '.pyi') {
-		return checkPython(content);
+		return checkPython(safeContent);
 	}
 
-	// TS/JS: deferred — see module doc.
+	if (ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx') {
+		return checkTypeScript(filePath, safeContent);
+	}
+
 	return { ok: true, message: '', tool: 'skipped', durationMs: 0 };
+}
+
+// ── TypeScript ─────────────────────────────────────────────────────────────────
+
+function checkTypeScript(filePath: string, content: string): CompileResult {
+	const t0 = performance.now();
+	const scriptTarget = ts.ScriptTarget.ESNext;
+	const isTsx = filePath.endsWith('.tsx') || filePath.endsWith('.jsx');
+	const scriptKind = isTsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+
+	const sourceFile = ts.createSourceFile(filePath, content, scriptTarget, true, scriptKind);
+	const parseDiagnostics = (sourceFile as any).parseDiagnostics as ts.Diagnostic[] | undefined;
+
+	const durationMs = performance.now() - t0;
+
+	if (parseDiagnostics && parseDiagnostics.length > 0) {
+		const firstErr = parseDiagnostics[0];
+		const message = formatTsDiagnostic(sourceFile, firstErr);
+		return { ok: false, message, tool: 'tsc', durationMs };
+	}
+
+	return { ok: true, message: '', tool: 'tsc', durationMs };
+}
+
+function formatTsDiagnostic(sourceFile: ts.SourceFile, diagnostic: ts.Diagnostic): string {
+	const text = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+	if (diagnostic.start !== undefined) {
+		const { line } = sourceFile.getLineAndCharacterOfPosition(diagnostic.start);
+		return `TS${diagnostic.code}: ${text} (line ${line + 1})`;
+	}
+	return `TS${diagnostic.code}: ${text}`;
 }
 
 // ── Python ─────────────────────────────────────────────────────────────────────

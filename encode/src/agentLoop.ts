@@ -31,6 +31,7 @@ import { IdeogramSteering, TURN_POISON, type IdeogramEdit, type SteeringConfig }
 import { intentChar, intentLegend } from './ideogramAllocator.js';
 import { getSmallModel } from './smallModel.js';
 import { KVColdStore } from './kvColdStore.js';
+import { KVPrefixCacheManager } from './kvPrefixCache.js';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -213,6 +214,11 @@ export interface AgentLoopConfig {
 	 */
 	shouldStop?: () => boolean;
 	/**
+	 * Epic 3: KV Cache Prefix Sharing & Sequence Forking.
+	 * Manages sequence checkpoints to achieve 0ms prefill on shared prompt prefixes.
+	 */
+	kvPrefixCache?: KVPrefixCacheManager;
+	/**
 	 * Epic M3 cold tier (see encode/src/kvColdStore.ts and
 	 * doc/research/ds4-kvstore-findings.md). `start()` tries to resume from a
 	 * disk-persisted KV checkpoint instead of re-prefilling the whole prompt from scratch —
@@ -312,9 +318,11 @@ export class AgentLoop {
 	private draftInitK: number;
 	private draftMinK: number;
 	private draftMaxK: number;
+	private kvPrefixCache: KVPrefixCacheManager;
 
 	constructor(config: AgentLoopConfig) {
 		this.model = config.model;
+		this.kvPrefixCache = config.kvPrefixCache ?? new KVPrefixCacheManager();
 		this.maxTokens = config.maxTokens ?? 4096;
 		this.profile = config.profile ?? activeProfile;
 		this.temperature = config.temperature ?? this.profile.defaultTemperature ?? 0;
@@ -427,7 +435,11 @@ export class AgentLoop {
 				await this.model.forwardAsync(promptTokens);
 			}
 		} else {
-			await this.prefillOrResume(prompt, promptTokens);
+			const restoredPrefix = this.kvPrefixCache.restorePrefix(promptTokens, this.model, 0);
+			if (!restoredPrefix) {
+				await this.prefillOrResume(prompt, promptTokens);
+				this.kvPrefixCache.savePrefix(promptTokens, this.model, 0);
+			}
 		}
 
 		this.nPast = promptTokens.length;

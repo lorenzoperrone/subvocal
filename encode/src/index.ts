@@ -24,6 +24,7 @@ export { assembleTensorPayload, tokenize, loadSystemRules, type TensorPayload } 
 export { murmurHash3, buildLineHashSnapshot, computeLineDelta, type LineHashSnapshot } from './lineLevelCRC.js';
 export { LineCRCCache } from './lineCRCCache.js';
 export { KVCacheManager, type TokenRange, type TokenBoundaries, type InvalidationResult } from './kvCacheManager.js';
+export { KVPrefixCacheManager, computePrefixHash, type CachedPrefix } from './kvPrefixCache.js';
 export { initSmallModel, freeSmallModel, getSmallModel, type SmallModelConfig } from './smallModel.js';
 export { initLargeModel, freeLargeModel, getLargeModel, type LargeModelConfig } from './largeModel.js';
 export { AgentLoop, type AgentLoopConfig, type AgentStep, type ParsedToolCall, type ReplayTurn } from './agentLoop.js';

@@ -21,6 +21,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { createInterface } from 'readline';
 
 import { FilePrewarmCache } from './filePrewarm.js';
+import { KVPrefixCacheManager } from './kvPrefixCache.js';
 import { IncrementalIntentClassifier } from './incrementalIntent.js';
 import type { IntentResult } from './intentRouter.js';
 
@@ -115,6 +116,8 @@ export interface UtterSession {
 	 * REPL `:file` command / `--file` flag) so the work is already done by submit time.
 	 */
 	filePrewarmCache: FilePrewarmCache;
+	/** Substory 3.4 / Epic 3: Session-level KV prefix cache for 0ms prefill on shared prefixes. */
+	kvPrefixCache: KVPrefixCacheManager;
 	/** M12.2: E2B generator model + loop, present only when config.dualBrain is set. */
 	smallGenModel?: BaseModel | null;
 	smallLoop?: AgentLoop | null;
@@ -208,11 +211,14 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 		console.log('[draft] E2B drafter loaded (shared): two-model specdec active');
 	}
 
+	const kvPrefixCache = new KVPrefixCacheManager();
+
 	const loop = new AgentLoop({
 		model: largeModel,
 		temperature: config.temperature ?? activeProfile.defaultTemperature ?? 0,
 		maxTokens: 2048,
 		useSteering: true,
+		kvPrefixCache,
 		// Suffix-tree drafter (doc/research/suffix-tree-speculative-decoding.md): free trie
 		// lookup, validated net-positive on edit-shaped turns. Composes with steering because
 		// IdeogramSteering samples greedily (pure observer) — and it makes the file-open
@@ -236,6 +242,7 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 			temperature: config.temperature ?? MacE2BProfile.defaultTemperature ?? 0,
 			maxTokens: 2048,
 			useSteering: false,
+			kvPrefixCache,
 			onToken: config.quiet ? undefined : (text: string) => process.stdout.write(text),
 		});
 		console.log(`[dualBrain] E2B generator loaded (shared): ${MacE2BProfile.largeModelPath}`);
@@ -252,6 +259,7 @@ export async function initSession(config: UtterConfig): Promise<UtterSession> {
 		log: [],
 		pipeline,
 		filePrewarmCache: new FilePrewarmCache(),
+		kvPrefixCache,
 		smallGenModel,
 		smallLoop,
 		draftModel,
