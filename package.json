@@ -21,9 +21,10 @@
   },
   "scripts": {
     "postinstall": "node scripts/patch-tree-sitter.js",
+    "build:native": "node scripts/build-platform.js",
     "build:synapse": "npm run build -w synapse",
     "build:encode": "npm run build -w encode",
-    "build": "npm run build:synapse && npm run build:encode",
+    "build": "npm run build:native",
     "test": "npm run test -w encode && npm run test -w synapse"
   }
 }
