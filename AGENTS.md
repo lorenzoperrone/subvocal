@@ -63,6 +63,8 @@ npm test                       # vitest for both packages
 - **Single Trunk (`main`)**: Never create long-lived OS-specific branches (`mac-dev`, `linux-dev`, `windows-dev`). All OS platforms share `main` as the single source of truth.
 - **Dynamic Platform Dispatch**: Platform differentiation is handled at runtime (`process.platform === 'darwin' | 'linux' | 'win32'`) and compile-time (`SUBVOCAL_BACKEND=cpu|gpu|metal`).
 - **Separate Binary Build Outputs**: Native C++ binaries output to platform-specific directories (`build-metal/` on Mac, `build-gpu/` on Linux CUDA, `build-cpu/` on CPU, `build-win/` on Windows) to prevent build clobbering across environments.
+- **Cross-Platform Auto-Build**: `npm run build` uses `scripts/build-platform.js` to automatically detect host OS + GPU availability (`nvidia-smi`) and dispatch the correct native build command.
+- **Environment & Model Directory Resolution**: `.env.local` is loaded automatically by `encode/src/envLoader.ts` (checks current directory, project root, and `~/.config/subvocal/.env.local`). `SUBVOCAL_MODEL_DIR` overrides base GGUF model paths across platforms.
 - **Short-Lived Feature Branches**: Hardware-specific experimental features must be developed on short-lived feature branches and merged into `main` behind conditional runtime/compile flags.
 
 ### TypeScript style

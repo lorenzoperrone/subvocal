@@ -21,11 +21,29 @@
 
 import path from 'path';
 import os from 'os';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
+import './envLoader.js';
 import type { Intent } from './intentRouter.js';
 import type { ToolDefinition } from './toolParse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Resolves the base directory for GGUF model files across platforms.
+ * Respects `SUBVOCAL_MODEL_DIR` env var if set, then `~/.cache/subvocal/models`,
+ * falling back to `defaultDir`.
+ */
+function resolveModelDir(defaultDir: string): string {
+  if (process.env.SUBVOCAL_MODEL_DIR && existsSync(process.env.SUBVOCAL_MODEL_DIR)) {
+    return process.env.SUBVOCAL_MODEL_DIR;
+  }
+  const userHomeCache = path.join(os.homedir(), '.cache', 'subvocal', 'models');
+  if (existsSync(userHomeCache)) {
+    return userHomeCache;
+  }
+  return defaultDir;
+}
 
 /** Wraps a string in the native protocol's reserved quote-marker token (never JSON's `"`). */
 function nativeQuote(s: string): string {
@@ -210,7 +228,7 @@ export interface ModelProfile {
 // EOT       : 106 '<turn|>'  (also 1 '<eos>', 50 '<|tool_response|>', 212 '</s>')
 // Template  : system embedded in user turn; <start_of_turn>model\n{prefill}
 
-const MODEL_DIR = '/mnt/dati_cachy/LLM/lmstudio-community';
+const MODEL_DIR = resolveModelDir('/mnt/dati_cachy/LLM/lmstudio-community');
 
 // Configurable context size: SUBVOCAL_CONTEXT_SIZE env var or default 64k (65536).
 // Set to any value >= 4096. The model supports up to 256k (n_ctx_train = 262144).
@@ -341,7 +359,7 @@ export const Gemma4Profile: ModelProfile = {
 //             appear anywhere in this model's actual chat template — would have been a
 //             silent correctness bug to copy Gemma4Profile's template here unverified).
 
-const MAC_MODEL_DIR = path.join(__dirname, '../../models');
+const MAC_MODEL_DIR = resolveModelDir(path.join(__dirname, '../../models'));
 
 // Same SUBVOCAL_CONTEXT_SIZE convention as Gemma4Profile. Default 128k: KV-per-token here is
 // far cheaper than the 26B-A4B's (global layers use head_count_kv=1, "unified" KV per the

@@ -37,7 +37,14 @@ sudo pacman -S --needed base-devel cmake ninja openblas nodejs npm
 
 ## ⚙️ Building the Native Engine
 
-Subvocal compiles its C++ N-API bindings via `cmake-js`. Run the build commands from the root workspace or `@subvocal/synapse`:
+Subvocal includes a cross-platform build dispatcher (`scripts/build-platform.js`). Running `npm run build` will automatically detect your OS and hardware capabilities (e.g. checking for `nvidia-smi`) and compile the appropriate native backend:
+
+```bash
+# Automatic build dispatcher (detects Linux CUDA vs CPU vs Mac Metal)
+npm run build
+```
+
+Alternatively, you can compile explicit target backends manually via `cmake-js`:
 
 ### Option A: Build CUDA GPU Backend (NVIDIA)
 
@@ -63,6 +70,19 @@ npm run build:encode
 
 # 3. Launch Subvocal
 subvocal
+```
+
+---
+
+## 🌐 Environment & Model Paths (`.env.local`)
+
+Subvocal automatically loads environment variables from `.env.local` or `~/.config/subvocal/.env.local`. Use `SUBVOCAL_MODEL_DIR` to specify where your GGUF checkpoints reside across different machines without editing codebase paths:
+
+```bash
+# Example ~/.config/subvocal/.env.local or .env.local in project root
+SUBVOCAL_MODEL_DIR=/mnt/dati_cachy/LLM/lmstudio-community
+SUBVOCAL_MODEL_PROFILE=gemma4
+SUBVOCAL_CONTEXT_SIZE=65536
 ```
 
 ---

@@ -25,6 +25,7 @@
     "build:synapse": "npm run build -w synapse",
     "build:encode": "npm run build -w encode",
     "build": "npm run build:native",
-    "test": "npm run test -w encode && npm run test -w synapse"
+    "test": "npm run test -w encode && npm run test -w synapse",
+    "test:fast": "vitest run"
   }
 }
