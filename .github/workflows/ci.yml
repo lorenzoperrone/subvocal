@@ -34,4 +34,4 @@ jobs:
           npm run build:encode
 
       - name: Run test suite
-        run: npm run test:fast
+        run: npm run test -w encode
