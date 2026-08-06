@@ -72,6 +72,9 @@ try {
 		console.log('[build-platform] ℹ️ Upstream C++ engine forks (llama.cpp / ik_llama.cpp) not present in workspace; skipping C++ compilation.');
 	}
 
+	console.log('[build-platform] Building TypeScript types (@subvocal/synapse)...');
+	execSync('npm run build:ts -w synapse', { stdio: 'inherit' });
+
 	console.log('[build-platform] Building TypeScript orchestration (@subvocal/encode)...');
 	execSync('npm run build:encode', { stdio: 'inherit' });
 

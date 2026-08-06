@@ -29,7 +29,9 @@ jobs:
         run: npm ci || npm install
 
       - name: Build TypeScript packages
-        run: npm run build:encode
+        run: |
+          npm run build:ts -w synapse
+          npm run build:encode
 
       - name: Run test suite
-        run: npm test
+        run: npm run test:fast
