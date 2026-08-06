@@ -249,6 +249,11 @@ export interface AgentStep {
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
+/**
+ * Core multi-turn AgentLoop orchestrator.
+ * Handles KV-cache-preserving multi-turn generation, dual-brain speculative execution,
+ * native tool token parsing, and prefill-ladder cold storage checkpointing.
+ */
 export class AgentLoop {
 	private model: BaseModel;
 	private maxTokens: number;

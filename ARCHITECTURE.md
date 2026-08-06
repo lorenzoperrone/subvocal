@@ -22,21 +22,24 @@ encode (@subvocal/encode)
 synapse (@subvocal/synapse)
    │  N-API binding: decode, KV control, logits/hidden-state access, steering
    ▼
-llama.cpp (Native GPU backend)
+llama.cpp / ik_llama.cpp (Native Hardware Acceleration)
 ```
 
 ### synapse — native inference binding
 
-A C++ N-API addon exposing llama.cpp's native GPU backend directly to Node: no HTTP server, no
+A C++ N-API addon exposing the native inference engine directly to Node.js: no HTTP server, no
 subprocess, no JSON serialization between the model and the orchestration layer. It exposes:
 decode (batched, KV-cache-aware), explicit KV-cache control (per-sequence remove/reset, needed
 for isolated auxiliary sequences), logits and mid-layer hidden-state access, and steering hooks
 (activation-space bias) for future model-behavior shaping.
 
-llama.cpp is not vendored — it's cloned separately and built with hardware acceleration enabled (specifically, a **Metal backend** for Apple Silicon, allowing full use of unified memory). Local
-modifications are tracked as a small patch set (see [subvocal-patches/](subvocal-patches/README.md))
-re-applied to a fresh checkout after each upstream sync, rather than committing a full engine
-fork's history to this repo.
+Hardware backends are selected at compile time (`SUBVOCAL_BACKEND`):
+- **Metal Backend (`metal`, macOS Apple Silicon)**: Uses `llama.cpp` built with `-DGGML_METAL=ON` to leverage unified memory architecture.
+- **CUDA Backend (`gpu`, Linux NVIDIA)**: Uses `llama.cpp` compiled with CUDA Toolkit (cuBLAS, cuBLASLt) and custom CUDA kernels (`cuda_kernels.cu`) for discrete GPUs.
+- **CPU Backend (`cpu`, Linux/macOS x86_64 & ARM64)**: Built statically against `ik_llama.cpp` with OpenMP and AVX2/AVX512/NEON SIMD vectorization.
+
+Engine modifications are tracked as a small patch set (see [subvocal-patches/](subvocal-patches/README.md))
+re-applied to fresh upstream checkouts after each sync.
 
 ### encode — preprocessing and orchestration
 

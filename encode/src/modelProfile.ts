@@ -224,6 +224,15 @@ const CTX = (() => {
 
 export const subvocalContextSize = CTX;
 
+/**
+ * Linux CUDA / CPU Model Profile (`gemma4`).
+ * 
+ * Optimized for discrete Linux desktop GPUs (e.g. RTX 4070 Ti / RTX 4090) with 16GB+ VRAM
+ * and system DDR5 RAM. Features a 3-tier KV cache architecture:
+ *  - Hot: SWA KV in VRAM (fixed ~288 MiB window) via patch 102.
+ *  - Warm: Global KV in system RAM via `noKvOffload: false`.
+ *  - Cold: Disk-resident KV checkpoint store on NVMe SSD (`/mnt/cache-llm/subvocal-kv-cold`).
+ */
 export const Gemma4Profile: ModelProfile = {
   name: 'gemma4',
 

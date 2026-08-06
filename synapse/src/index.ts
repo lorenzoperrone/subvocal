@@ -1,3 +1,13 @@
+/**
+ * @fileoverview @subvocal/synapse — Native C++ N-API bindings for llama.cpp & ik_llama.cpp
+ *
+ * Exposes in-process hardware-accelerated GGUF inference directly to Node.js without REST/HTTP overhead.
+ * Supports three backends selected at compile time via SUBVOCAL_BACKEND:
+ *  - `cpu`:  ik_llama.cpp static build (OpenMP + AVX2/AVX512 on x86, NEON on ARM64)
+ *  - `gpu`:  llama.cpp static build with CUDA acceleration (NVIDIA Linux)
+ *  - `metal`: llama.cpp static build with Metal acceleration (macOS Apple Silicon)
+ */
+
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,12 +15,14 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
+/** Path to the compiled CPU C++ N-API binary (`subvocal_ffi_cpu.node`). */
 const CPU_PATH = resolve(here, "..", "build-cpu", "Release", "subvocal_ffi_cpu.node");
-// This Mac port's GPU-accelerated backend is Metal, built into build-metal/ (addon name
-// subvocal_ffi_metal per CMakeLists.txt's SUBVOCAL_BACKEND=metal branch) -- there is no CUDA
-// backend in this repo at all. "build-gpu/subvocal_ffi_gpu.node" never exists here; it was a
-// leftover path from the Linux/CUDA port this was copied from. ModelGPU/getGpuBinding() still
-// mean "the GPU-accelerated backend" generically -- on this platform that's always Metal.
+
+/**
+ * Path to the compiled GPU C++ N-API binary.
+ * On macOS (`darwin`), resolves to Metal backend (`build-metal/subvocal_ffi_metal.node`).
+ * On Linux, resolves to CUDA backend (`build-gpu/Release/subvocal_ffi_gpu.node`).
+ */
 const GPU_PATH = process.platform === "darwin"
 	? resolve(here, "..", "build-metal", "subvocal_ffi_metal.node")
 	: resolve(here, "..", "build-gpu", "Release", "subvocal_ffi_gpu.node");
@@ -209,6 +221,11 @@ export interface ModelOptions {
 	nUbatch?: number;
 }
 
+/**
+ * Abstract base class wrapping native C++ GGUF inference model handles.
+ * Exposes tokenization, batched decode, KV cache sequence management, logit bias steering,
+ * and suffix-tree speculative drafting.
+ */
 export abstract class BaseModel {
 	protected native: NativeModel;
 	protected freed = false;

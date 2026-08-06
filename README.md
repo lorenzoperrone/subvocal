@@ -1,6 +1,7 @@
 # Subvocal
 
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple_Silicon-black?logo=apple)](#-macos-apple-silicon)
+[![Linux x86__64](https://img.shields.io/badge/Linux-x86__64_CUDA_|_CPU-blue?logo=linux)](#-linux-x86-64)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-%3E%3D22.19-green?logo=node.js)](#-download-and-installation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -144,9 +145,25 @@ The `subvocal` launcher supports a few hidden "power-user" flags:
   ```
   *(Tip: Use `SUBVOCAL_MONITOR=raw` to see the literal token-by-token decode stream).*
 
-### Linux x86-64 (TBD)
+### Linux x86-64 (CPU & CUDA GPU)
 
-*Support coming soon. (The architecture will leverage native CUDA/Vulkan backends).*
+Subvocal natively supports Linux x86-64 with two dedicated C++ N-API backends:
+
+1. **CUDA GPU Backend (`SUBVOCAL_BACKEND=gpu`)**:
+   - Compiles `binding_gpu.cpp` and `cuda_kernels.cu` against NVIDIA CUDA Toolkit (cuBLAS, cuBLASLt).
+   - Supports 3-tier memory allocation: VRAM (hot SWA KV) + system RAM (warm global KV via `noKvOffload`) + NVMe SSD (cold `zstd` prefill ladders).
+   - Build command:
+     ```bash
+     npm run build:gpu -w synapse
+     ```
+
+2. **CPU High-Performance Backend (`SUBVOCAL_BACKEND=cpu`)**:
+   - Compiles statically against `ik_llama.cpp` using OpenMP multi-threading and AVX2/AVX512 SIMD vectorization.
+   - Ideal for server environments or systems without dedicated NVIDIA GPUs.
+   - Build command:
+     ```bash
+     npm run build:cpu -w synapse
+     ```
 
 ### Windows x86-64 (TBD)
 

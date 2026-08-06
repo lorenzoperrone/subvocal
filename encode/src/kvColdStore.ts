@@ -173,6 +173,11 @@ interface ColdStoreEntry {
   reason: CheckpointReason;
 }
 
+/**
+ * Disk-persistent KV Checkpoint Store ("Cold Tier").
+ * Manages incremental session checkpoints on SSD using prompt-text SHA1 hashing,
+ * byte-plane shuffle, and zstd compression. Achieves 0ms session resume.
+ */
 export class KVColdStore {
   constructor(
     private readonly dir: string,
