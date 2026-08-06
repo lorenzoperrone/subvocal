@@ -19,7 +19,8 @@
 
 import { spawnSync } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
-import { extname } from 'path';
+import { extname, join } from 'path';
+import { tmpdir } from 'os';
 import ts from 'typescript';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ function formatTsDiagnostic(sourceFile: ts.SourceFile, diagnostic: ts.Diagnostic
 // ── Python ─────────────────────────────────────────────────────────────────────
 
 function checkPython(content: string): CompileResult {
-	const tmpPath = `/tmp/subvocal-pycheck-${Date.now()}-${process.pid}.py`;
+	const tmpPath = join(tmpdir(), `subvocal-pycheck-${Date.now()}-${process.pid}.py`);
 	const t0 = performance.now();
 	try {
 		writeFileSync(tmpPath, content, 'utf-8');
