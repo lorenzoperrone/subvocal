@@ -21,10 +21,13 @@ const CPU_PATH = resolve(here, "..", "build-cpu", "Release", "subvocal_ffi_cpu.n
 /**
  * Path to the compiled GPU C++ N-API binary.
  * On macOS (`darwin`), resolves to Metal backend (`build-metal/subvocal_ffi_metal.node`).
+ * On Windows (`win32`), resolves to DirectML/CUDA backend (`build-win/Release/subvocal_ffi_win.node`).
  * On Linux, resolves to CUDA backend (`build-gpu/Release/subvocal_ffi_gpu.node`).
  */
 const GPU_PATH = process.platform === "darwin"
 	? resolve(here, "..", "build-metal", "subvocal_ffi_metal.node")
+	: process.platform === "win32"
+	? resolve(here, "..", "build-win", "Release", "subvocal_ffi_win.node")
 	: resolve(here, "..", "build-gpu", "Release", "subvocal_ffi_gpu.node");
 
 interface NativeModel {
