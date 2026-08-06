@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/*.json dist/",
-    "test": "vitest run",
+    "test": "vitest run test/",
     "test:watch": "vitest"
   },
   "dependencies": {
